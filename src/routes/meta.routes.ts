@@ -108,7 +108,14 @@ router.post('/test-webhook', async (req, res) => {
 // Direct Instagram Login OAuth URL Builder
 // Ref: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login
 router.get('/oauth/url', (req, res) => {
-  const appId = process.env.META_APP_ID || process.env.INSTAGRAM_APP_ID;
+  // Instagram Business Login authenticates against the *Instagram* app id, which
+  // is issued by the Instagram product and is a different number from the
+  // Facebook App ID on App settings > Basic. Sending the Facebook App ID here is
+  // what makes instagram.com answer "Sorry, this page isn't available".
+  const instagramAppId = process.env.INSTAGRAM_APP_ID;
+  const facebookAppId = process.env.META_APP_ID;
+  const appId = instagramAppId || facebookAppId;
+
   const redirectUri =
     process.env.META_REDIRECT_URI || 'https://bharatautomatebackend.onrender.com/api/meta/oauth/callback';
 
@@ -117,14 +124,29 @@ router.get('/oauth/url', (req, res) => {
       ok: false,
       configured: false,
       message:
-        'Meta / Instagram App ID is not configured yet. You can enter your App ID & App Secret or paste your Page Access Token to connect.',
+        'Instagram App ID is not configured yet. Add INSTAGRAM_APP_ID (App Dashboard > Instagram > API setup with Instagram business login), or paste a Page Access Token to connect manually.',
     });
   }
+
+  const usingFacebookAppId = !instagramAppId;
+  if (usingFacebookAppId) {
+    console.warn(
+      '[Instagram Login] INSTAGRAM_APP_ID is not set — falling back to META_APP_ID (%s). ' +
+        'Instagram Business Login usually rejects the Facebook App ID with "this page isn\'t available".',
+      facebookAppId
+    );
+  }
+
+  const scopes = (process.env.INSTAGRAM_SCOPES || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   const instagramLoginUrl = MetaService.buildInstagramLoginUrl({
     appId,
     redirectUri,
     state: `sma_${Date.now().toString(36)}`,
+    scopes,
   });
 
   return res.json({
@@ -132,6 +154,17 @@ router.get('/oauth/url', (req, res) => {
     configured: true,
     type: 'instagram_login',
     url: instagramLoginUrl,
+    // Surfaced so the dashboard can warn before the user hits a dead Instagram page.
+    usingFacebookAppId,
+    appId,
+    redirectUri,
+    scopes: scopes.length ? scopes : MetaService.DEFAULT_INSTAGRAM_SCOPES,
+    ...(usingFacebookAppId
+      ? {
+          warning:
+            'Using the Facebook App ID for Instagram Business Login. Set INSTAGRAM_APP_ID to the Instagram app ID, and register this exact redirect URI under Instagram > API setup with Instagram business login > Business login settings.',
+        }
+      : {}),
   });
 });
 
@@ -153,8 +186,10 @@ router.get('/oauth/callback', async (req, res) => {
   }
 
   try {
-    const appId = process.env.META_APP_ID || process.env.INSTAGRAM_APP_ID || '';
-    const appSecret = process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || '';
+    // Must be the same credential pair used to build the authorize URL, or
+    // Instagram rejects the code exchange with "Invalid platform app".
+    const appId = process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID || '';
+    const appSecret = process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET || '';
     const redirectUri =
       process.env.META_REDIRECT_URI || 'https://bharatautomatebackend.onrender.com/api/meta/oauth/callback';
 
@@ -234,15 +269,21 @@ router.get('/oauth/callback', async (req, res) => {
 
 // Update Meta App Credentials on the fly
 router.post('/config', (req, res) => {
-  const { appId, appSecret, redirectUri } = req.body;
+  const { appId, appSecret, redirectUri, instagramAppId, instagramAppSecret } = req.body;
   if (appId) process.env.META_APP_ID = appId;
   if (appSecret) process.env.META_APP_SECRET = appSecret;
   if (redirectUri) process.env.META_REDIRECT_URI = redirectUri;
+  // Instagram Business Login uses its own app id/secret pair.
+  if (instagramAppId) process.env.INSTAGRAM_APP_ID = instagramAppId;
+  if (instagramAppSecret) process.env.INSTAGRAM_APP_SECRET = instagramAppSecret;
 
+  const igId = process.env.INSTAGRAM_APP_ID || '';
   return res.json({
     ok: true,
-    configured: Boolean(process.env.META_APP_ID && process.env.META_APP_SECRET),
+    configured: Boolean((igId || process.env.META_APP_ID) && (process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET)),
     appId: process.env.META_APP_ID || '',
+    instagramAppId: igId,
+    instagramLoginReady: Boolean(igId && process.env.INSTAGRAM_APP_SECRET),
   });
 });
 

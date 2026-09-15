@@ -22,41 +22,30 @@ import metaRoutes from './routes/meta.routes.js';
 
 export const app = express();
 
-// Allowed origins
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'https://bharatautomatefrontend.vercel.app',
-  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
-];
+// Bulletproof CORS Middleware
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie, X-Requested-With, Accept, Origin');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
 
-// CORS Middleware
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, curl, server-to-server)
-      if (!origin) return callback(null, true);
-
-      // Check against allowed origins or any vercel.app preview domain
-      if (
-        allowedOrigins.includes(origin) ||
-        origin.endsWith('.vercel.app') ||
-        origin.includes('localhost') ||
-        origin.includes('127.0.0.1')
-      ) {
-        return callback(null, true);
-      }
-
-      // Allow all origins by returning true to reflect requesting origin
-      return callback(null, true);
-    },
+    origin: (origin, callback) => callback(null, true),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'X-Requested-With', 'Accept', 'Origin'],
   })
 );
 
-// Explicit preflight handling
 app.options('*', cors());
 
 app.use(express.json());

@@ -1,7 +1,22 @@
 import axios from 'axios';
 import crypto from 'crypto';
 
-const GRAPH_API_BASE = 'https://graph.facebook.com/v21.0';
+const GRAPH_VERSION = 'v21.0';
+const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+const INSTAGRAM_GRAPH_BASE = `https://graph.instagram.com/${GRAPH_VERSION}`;
+
+/**
+ * Pick the right Graph host for a token.
+ *
+ * Tokens issued by Instagram Business Login are only valid against
+ * graph.instagram.com; Page access tokens from Facebook Login are only valid
+ * against graph.facebook.com. Calling the wrong host fails with a confusing
+ * OAuth error, so we route on the token's own prefix: Instagram user tokens
+ * start with "IG", Facebook/Page tokens with "EAA".
+ */
+function graphBase(accessToken?: string): string {
+  return accessToken?.startsWith('IG') ? INSTAGRAM_GRAPH_BASE : GRAPH_API_BASE;
+}
 
 export interface MetaSendDmOptions {
   recipientIgsid: string;
@@ -63,7 +78,7 @@ export class MetaService {
     }
 
     try {
-      const response = await axios.post(`${GRAPH_API_BASE}/me/messages`, body, {
+      const response = await axios.post(`${graphBase(accessToken)}/me/messages`, body, {
         params: { access_token: accessToken },
         headers: { 'Content-Type': 'application/json' },
       });
@@ -86,7 +101,7 @@ export class MetaService {
   static async replyToComment(commentId: string, message: string, accessToken: string) {
     try {
       const response = await axios.post(
-        `${GRAPH_API_BASE}/${commentId}/replies`,
+        `${graphBase(accessToken)}/${commentId}/replies`,
         { message },
         { params: { access_token: accessToken } }
       );
@@ -103,7 +118,7 @@ export class MetaService {
   static async sendPrivateCommentReply(commentId: string, message: string, accessToken: string) {
     try {
       const response = await axios.post(
-        `${GRAPH_API_BASE}/me/messages`,
+        `${graphBase(accessToken)}/me/messages`,
         {
           recipient: { comment_id: commentId },
           message: { text: message },
@@ -124,13 +139,13 @@ export class MetaService {
     try {
       if (action === 'hide') {
         const response = await axios.post(
-          `${GRAPH_API_BASE}/${commentId}`,
+          `${graphBase(accessToken)}/${commentId}`,
           { hide: true },
           { params: { access_token: accessToken } }
         );
         return { success: true, data: response.data };
       } else {
-        const response = await axios.delete(`${GRAPH_API_BASE}/${commentId}`, {
+        const response = await axios.delete(`${graphBase(accessToken)}/${commentId}`, {
           params: { access_token: accessToken },
         });
         return { success: true, data: response.data };
@@ -145,7 +160,7 @@ export class MetaService {
    */
   static async checkFollowerStatus(businessIgsid: string, userIgsid: string, accessToken: string): Promise<boolean> {
     try {
-      const res = await axios.get(`${GRAPH_API_BASE}/${businessIgsid}`, {
+      const res = await axios.get(`${graphBase(accessToken)}/${businessIgsid}`, {
         params: {
           fields: `user_profile{is_user_follow_business,is_business_follow_user}`,
           access_token: accessToken,
@@ -172,7 +187,7 @@ export class MetaService {
       }));
 
       const res = await axios.post(
-        `${GRAPH_API_BASE}/me/messenger_profile`,
+        `${graphBase(accessToken)}/me/messenger_profile`,
         {
           ice_breakers: [
             {
@@ -205,7 +220,7 @@ export class MetaService {
       });
 
       const res = await axios.post(
-        `${GRAPH_API_BASE}/me/messenger_profile`,
+        `${graphBase(accessToken)}/me/messenger_profile`,
         {
           persistent_menu: [
             {
@@ -228,7 +243,7 @@ export class MetaService {
    */
   static async validateToken(accessToken: string) {
     try {
-      const res = await axios.get(`${GRAPH_API_BASE}/me`, {
+      const res = await axios.get(`${graphBase(accessToken)}/me`, {
         params: {
           fields: 'id,name,username',
           access_token: accessToken,
@@ -244,18 +259,23 @@ export class MetaService {
    * Build direct Instagram Login Authorization URL
    * Ref: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login
    */
+  /** Scopes every install needs. Content publishing is opt-in because it must be
+   *  added separately under Permissions and features before it can be requested —
+   *  asking for a scope the app does not have breaks the consent dialog. */
+  static readonly DEFAULT_INSTAGRAM_SCOPES = [
+    'instagram_business_basic',
+    'instagram_business_manage_messages',
+    'instagram_business_manage_comments',
+  ];
+
   static buildInstagramLoginUrl(options: {
     appId: string;
     redirectUri: string;
     state?: string;
+    scopes?: string[];
   }): string {
     const { appId, redirectUri, state = 'sma_ig_login' } = options;
-    const scopes = [
-      'instagram_business_basic',
-      'instagram_business_manage_messages',
-      'instagram_business_manage_comments',
-      'instagram_business_content_publish',
-    ].join(',');
+    const scopes = (options.scopes?.length ? options.scopes : MetaService.DEFAULT_INSTAGRAM_SCOPES).join(',');
 
     const params = new URLSearchParams({
       enable_fb_login: '0', // Forces native Instagram login dialog (no Facebook login required)
