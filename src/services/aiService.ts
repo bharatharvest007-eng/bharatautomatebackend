@@ -21,7 +21,9 @@ export class AiService {
   static async generateCommentReply(
     commentText: string,
     postCaption: string = '',
-    brandVoice: BrandVoiceConfig = {}
+    brandVoice: BrandVoiceConfig = {},
+    /** Extra one-off context from the automation's `ai_reply` node, layered on top of the brand voice. */
+    instruction?: string,
   ): Promise<{ reply: string; tokensUsed: number }> {
     if (!client || apiKey.startsWith('sk-ant-dummy')) {
       // High-quality contextual fallback if API key is not configured yet
@@ -47,11 +49,14 @@ Rules:
 - Invite the commenter to check their DMs or reply with enthusiasm.
 ${brandVoice.rules ? brandVoice.rules.map((r) => `- ${r}`).join('\n') : ''}
 Forbidden words: ${brandVoice.forbiddenWords?.join(', ') || 'none'}
+${instruction ? `\nExtra instruction for this specific reply: ${instruction}` : ''}
 `;
 
     try {
       const response = await client.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
+        // Current flagship model — the previous pin (claude-3-5-sonnet-20241022)
+        // was a retired dated snapshot.
+        model: 'claude-sonnet-5',
         max_tokens: 150,
         temperature: 0.7,
         system: systemPrompt,
@@ -117,7 +122,8 @@ Forbidden words: ${brandVoice.forbiddenWords?.join(', ') || 'none'}
 
     try {
       const response = await client.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
+        // Runs once per inbound comment — cheap/fast model, current generation.
+        model: 'claude-haiku-4-5',
         max_tokens: 100,
         temperature: 0,
         messages: [

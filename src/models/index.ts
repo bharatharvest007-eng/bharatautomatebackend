@@ -30,3 +30,6 @@ export * from './UsageCounter.js';
 export * from './DailyStat.js';
 export * from './RateLimitState.js';
 export * from './OAuthState.js';
+export * from './WhatsAppTemplate.js';
+export * from './Broadcast.js';
+export * from './Reminder.js';

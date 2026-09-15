@@ -43,6 +43,16 @@ export type AutomationType =
   | 'postback'
   /** A referral link (ig.me/m/<user>?ref=...). */
   | 'referral'
+  /** A WhatsApp message arrives — the WhatsApp analogue of `dm`. */
+  | 'whatsapp_message'
+  /** The first-ever message from a WhatsApp contact. */
+  | 'whatsapp_welcome'
+  /** A message arrives in a Facebook Page's Messenger inbox. */
+  | 'facebook_message'
+  /** A comment lands on a Facebook Page post. */
+  | 'facebook_comment'
+  /** A visitor sends a message through the embedded website widget. */
+  | 'widget_message'
   /** Manually run: broadcasts, rewind sweeps, tests. */
   | 'manual';
 
@@ -141,6 +151,17 @@ export interface CardContent {
   buttons?: ButtonAction[];
 }
 
+export interface ListRow {
+  id: string;
+  title: string;
+  description?: string;
+}
+
+export interface ListSection {
+  title?: string;
+  rows: ListRow[];
+}
+
 export type MessageContent =
   | { kind: 'text'; text: string; quickReplies?: QuickReply[] }
   | { kind: 'buttons'; text: string; buttons: ButtonAction[] }
@@ -152,7 +173,15 @@ export type MessageContent =
   | { kind: 'sticker'; sticker: 'heart' }
   | { kind: 'reaction'; reaction: 'love'; messageId: string }
   | { kind: 'media_share'; mediaId: string }
-  | { kind: 'template'; templateId: string };
+  | { kind: 'template'; templateId: string }
+  /** WhatsApp only: an approved HSM template, sent with variable values filled in. */
+  | { kind: 'whatsapp_template'; templateName: string; language: string; params?: Record<string, string> }
+  /** WhatsApp only: a scrollable picker — up to 10 rows across sections, one tap to reply. */
+  | { kind: 'interactive_list'; text: string; buttonLabel: string; sections: ListSection[] }
+  /** WhatsApp only: one or more products from a connected Commerce Catalog. */
+  | { kind: 'catalog'; catalogId: string; productIds: string[]; bodyText?: string }
+  /** WhatsApp only: asks the contact to share their location. */
+  | { kind: 'location_request'; text: string };
 
 // ---------------------------------------------------------------------------
 // Flow graph

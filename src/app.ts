@@ -20,6 +20,11 @@ import analyticsRoutes from './routes/analytics.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import metaRoutes from './routes/meta.routes.js';
 import mediaRoutes from './routes/media.routes.js';
+import whatsappRoutes from './routes/whatsapp.routes.js';
+import facebookRoutes from './routes/facebook.routes.js';
+import broadcastsRoutes from './routes/broadcasts.routes.js';
+import widgetRoutes from './routes/widget.routes.js';
+import remindersRoutes from './routes/reminders.routes.js';
 
 export const app = express();
 
@@ -81,6 +86,11 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/meta', metaRoutes);
 app.use('/api/media', mediaRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/facebook', facebookRoutes);
+app.use('/api/broadcasts', broadcastsRoutes);
+app.use('/api/widget', widgetRoutes);
+app.use('/api/reminders', remindersRoutes);
 
 // Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {

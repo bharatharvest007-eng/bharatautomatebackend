@@ -423,4 +423,86 @@ export class MetaService {
       return { success: false, error: metaError?.message || error.message };
     }
   }
+
+  // ===========================================================================
+  // Facebook Pages
+  //
+  // A Facebook Page is reached through the *same* Graph API surface as
+  // Instagram — same Send API shape, same comment endpoints — the only real
+  // differences are the host (graph.facebook.com, already the default) and
+  // that a Page's token comes from listing /me/accounts rather than a direct
+  // OAuth exchange. Sending/replying reuses sendDirectMessage/replyToComment
+  // above unchanged once we hold a Page access token.
+  // ===========================================================================
+
+  /**
+   * List every Facebook Page a user access token can manage, each with its
+   * own long-lived Page access token — that Page token, not the user token, is
+   * what gets stored on the SocialAccount and used for every later call.
+   */
+  static async discoverFacebookPages(userAccessToken: string) {
+    try {
+      const res = await axios.get(`${GRAPH_API_BASE}/me/accounts`, {
+        params: {
+          fields: 'id,name,access_token,category,picture{url},instagram_business_account{id,username}',
+          access_token: userAccessToken,
+          limit: 100,
+        },
+      });
+
+      const pages = (res.data?.data ?? []).map((p: any) => ({
+        pageId: p.id,
+        pageName: p.name,
+        pageAccessToken: p.access_token,
+        category: p.category,
+        avatarUrl: p.picture?.data?.url,
+        linkedInstagramId: p.instagram_business_account?.id,
+        linkedInstagramUsername: p.instagram_business_account?.username,
+      }));
+
+      return { success: true, pages };
+    } catch (error: any) {
+      const metaError = error.response?.data?.error;
+      console.error('[Meta Graph API] discoverFacebookPages failed:', metaError || error.message);
+      return { success: false, error: metaError?.message || error.message, pages: [] };
+    }
+  }
+
+  /**
+   * Subscribe our app to this Page's messaging + feed events. Page webhooks
+   * are per-Page (unlike Instagram's per-account subscription, the shape is
+   * identical) and use the Page's own token.
+   */
+  static async subscribePageWebhooks(pageId: string, pageAccessToken: string) {
+    const fields = ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_reactions', 'feed'].join(',');
+    try {
+      const res = await axios.post(
+        `${GRAPH_API_BASE}/${pageId}/subscribed_apps`,
+        null,
+        { params: { subscribed_fields: fields, access_token: pageAccessToken } },
+      );
+      return { success: res.data?.success !== false, data: res.data, fields };
+    } catch (error: any) {
+      const metaError = error.response?.data?.error;
+      console.error('[Meta Graph API] subscribePageWebhooks failed:', metaError || error.message);
+      return { success: false, error: metaError?.message || error.message };
+    }
+  }
+
+  /** Fetch a Page's own recent feed posts, for the Posts & Reels board. */
+  static async fetchPagePosts(pageId: string, pageAccessToken: string, limit = 25) {
+    try {
+      const res = await axios.get(`${GRAPH_API_BASE}/${pageId}/posts`, {
+        params: {
+          fields: 'id,message,full_picture,permalink_url,created_time,likes.summary(true),comments.summary(true)',
+          access_token: pageAccessToken,
+          limit,
+        },
+      });
+      return { success: true, posts: res.data?.data ?? [] };
+    } catch (error: any) {
+      const metaError = error.response?.data?.error;
+      return { success: false, error: metaError?.message || error.message, posts: [] };
+    }
+  }
 }

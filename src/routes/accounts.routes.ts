@@ -15,7 +15,10 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Connect account directly with Page Access Token & Instagram Business ID
+// Connect an Instagram account directly with a Page Access Token & Instagram Business ID.
+// Field names below match the SocialAccount schema exactly — Mongoose strict
+// mode silently drops anything that doesn't, which is how this route used to
+// "succeed" while saving an account that could never actually send a DM.
 router.post('/connect', async (req, res) => {
   try {
     const { username, instagramBusinessId, accessToken, dailyDmLimit } = req.body;
@@ -29,22 +32,29 @@ router.post('/connect', async (req, res) => {
 
     // Verify token validity with Meta Graph API
     const validation = await MetaService.validateToken(accessToken);
+    const cleanUsername = username.replace('@', '');
+    const igUserId = instagramBusinessId || validation.data?.id || `ig_${Date.now()}`;
 
-    const accountId = `acc_${username.replace(/[^a-zA-Z0-9_]/g, '')}_${Date.now().toString(36)}`;
+    const accountId = `acc_${cleanUsername.replace(/[^a-zA-Z0-9_]/g, '')}_${Date.now().toString(36)}`;
 
-    const account = await models.SocialAccount.create({
-      _id: accountId,
-      orgId,
-      platform: 'instagram',
-      username: username.replace('@', ''),
-      displayName: username,
-      instagramBusinessId: instagramBusinessId || validation.data?.id || `ig_${Date.now()}`,
-      accessToken,
-      tokenExpiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // 60 days
-      dailyDmLimit: Number(dailyDmLimit) || 1000,
-      status: 'active',
-      capabilities: ['messages', 'comments', 'mentions', 'insights'],
-    });
+    const account = await models.SocialAccount.findOneAndUpdate(
+      { orgId, igUserId },
+      {
+        $set: {
+          platform: 'instagram',
+          username: cleanUsername,
+          name: cleanUsername,
+          igUserId,
+          loginMode: 'facebook', // manual Page Access Token, not Instagram Login
+          accessToken,
+          tokenExpiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // 60 days
+          dailyDmLimit: Number(dailyDmLimit) || 1000,
+          status: 'active',
+        },
+        $setOnInsert: { _id: accountId, connectedAt: new Date() },
+      },
+      { upsert: true, returnDocument: 'after', runValidators: true },
+    );
 
     return res.status(201).json({
       ok: true,

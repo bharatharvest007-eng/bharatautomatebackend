@@ -16,6 +16,10 @@ export interface IContact {
   country?: string;
   fields: Record<string, string>;
   tags: string[];
+  /** How this contact first reached us: organic | ctwa_ad | referral | widget. */
+  source: string;
+  /** Raw referral payload Meta attaches when a conversation starts from a Click-to-WhatsApp/IG ad. */
+  referral?: Record<string, unknown>;
   isFollower: boolean;
   followerCheckedAt?: Date;
   followConfirmedAt?: Date;
@@ -51,6 +55,8 @@ const ContactSchema = new Schema<IContact>(
     country: { type: String },
     fields: { type: Schema.Types.Mixed, default: {} },
     tags: [{ type: String }],
+    source: { type: String, default: 'organic' },
+    referral: { type: Schema.Types.Mixed },
     isFollower: { type: Boolean, default: false },
     followerCheckedAt: { type: Date },
     followConfirmedAt: { type: Date },

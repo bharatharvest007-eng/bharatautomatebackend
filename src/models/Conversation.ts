@@ -20,6 +20,10 @@ export interface IConversation {
   messageCount: number;
   humanHandover: boolean;
   handoverAt?: Date;
+  /** Once a human sends a message, Meta's HUMAN_AGENT tag lets us reply for 7 more days. */
+  humanAgentUntil?: Date;
+  /** instagram | whatsapp | facebook | widget — which channel this thread lives on. */
+  platform: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -45,6 +49,8 @@ const ConversationSchema = new Schema<IConversation>(
     messageCount: { type: Number, default: 0 },
     humanHandover: { type: Boolean, default: false },
     handoverAt: { type: Date },
+    humanAgentUntil: { type: Date },
+    platform: { type: String, default: 'instagram', index: true },
   },
   {
     timestamps: true,
