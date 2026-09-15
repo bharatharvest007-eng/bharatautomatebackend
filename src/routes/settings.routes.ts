@@ -11,7 +11,11 @@ router.get('/', async (req, res) => {
   try {
     const org = await models.Organization.findOne();
     const port = process.env.PORT || '5000';
-    const baseUrl = process.env.BASE_URL || `http://localhost:${port}`;
+    const baseUrl =
+      process.env.BASE_URL ||
+      (process.env.NODE_ENV === 'production'
+        ? 'https://bharatautomatebackend.onrender.com'
+        : `http://localhost:${port}`);
 
     return res.json({
       ok: true,
