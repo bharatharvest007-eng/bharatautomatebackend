@@ -42,6 +42,32 @@ router.post('/webhook', async (req, res) => {
   // Acknowledge Meta immediately with 200 OK
   res.status(200).send('EVENT_RECEIVED');
 
+  // Persist the raw delivery before doing anything with it. Without this there
+  // is no way to tell "Meta never delivered" apart from "we mishandled it",
+  // which is the difference between a Meta config problem and a code problem.
+  const rawPayload = JSON.stringify(req.body);
+  let eventId: string | null = null;
+  try {
+    eventId = `wh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    await models.WebhookEvent.create({
+      _id: eventId,
+      platform: 'instagram',
+      objectId: req.body?.entry?.[0]?.id,
+      field: req.body?.entry?.[0]?.changes?.[0]?.field ?? (req.body?.entry?.[0]?.messaging ? 'messaging' : undefined),
+      // Signature is unique-indexed, so a Meta redelivery collapses onto one row.
+      signature: signature || `nosig_${eventId}`,
+      payload: rawPayload,
+      status: 'processing',
+      attempts: 1,
+    });
+  } catch (e: any) {
+    if (e?.code === 11000) {
+      console.log('[Meta Webhook] Duplicate delivery ignored');
+      return;
+    }
+    console.error('[Meta Webhook] Could not persist event:', e.message);
+  }
+
   try {
     const { entry } = req.body;
     if (!Array.isArray(entry)) return;
@@ -52,7 +78,7 @@ router.post('/webhook', async (req, res) => {
         for (const change of e.changes) {
           if (change.field === 'comments') {
             const val = change.value;
-            await FlowEngine.processComment({
+            const result = await FlowEngine.processComment({
               accountId: e.id,
               commentId: val.id,
               mediaId: val.media?.id,
@@ -60,6 +86,9 @@ router.post('/webhook', async (req, res) => {
               username: val.from?.username || 'user',
               commentText: val.text || '',
             });
+            console.log(
+              `[Meta Webhook] Comment "${val.text}" from @${val.from?.username} -> ${JSON.stringify(result)}`
+            );
           }
         }
       }
@@ -73,9 +102,51 @@ router.post('/webhook', async (req, res) => {
         }
       }
     }
-  } catch (error) {
+
+    if (eventId) {
+      await models.WebhookEvent.updateOne(
+        { _id: eventId },
+        { $set: { status: 'done', processedAt: new Date() } }
+      );
+    }
+  } catch (error: any) {
     console.error('[Meta Webhook] Error processing event in background:', error);
+    if (eventId) {
+      await models.WebhookEvent.updateOne(
+        { _id: eventId },
+        { $set: { status: 'failed', error: String(error?.message || error), processedAt: new Date() } }
+      ).catch(() => undefined);
+    }
   }
+});
+
+/** Recent webhook deliveries — the fastest way to tell whether Meta is calling us. */
+router.get('/webhook/recent', async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const events = await models.WebhookEvent.find({})
+    .sort({ receivedAt: -1 })
+    .limit(limit)
+    .lean();
+
+  return res.json({
+    ok: true,
+    count: events.length,
+    events: events.map((e: any) => ({
+      id: e._id,
+      field: e.field,
+      objectId: e.objectId,
+      status: e.status,
+      error: e.error,
+      receivedAt: e.receivedAt,
+      payload: (() => {
+        try {
+          return JSON.parse(e.payload);
+        } catch {
+          return e.payload;
+        }
+      })(),
+    })),
+  });
 });
 
 // Test Webhook Simulator (Test any comment against live flows from the dashboard)
@@ -205,26 +276,59 @@ router.get('/oauth/callback', async (req, res) => {
 
     const accountId = `acc_${exchange.username.replace(/[^a-zA-Z0-9_]/g, '')}_${Date.now().toString(36)}`;
 
-    // Upsert social account
+    // Upsert social account.
+    // Field names must match the SocialAccount schema exactly: Mongoose runs in
+    // strict mode and silently DROPS unknown keys, so a typo here stores nothing
+    // and fails later at send time instead of here.
+    const scopes = (process.env.INSTAGRAM_SCOPES || MetaService.DEFAULT_INSTAGRAM_SCOPES.join(','))
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
     const account = await models.SocialAccount.findOneAndUpdate(
-      { orgId, username: exchange.username },
+      { orgId, igUserId: exchange.instagramUserId },
       {
         $set: {
           platform: 'instagram',
-          displayName: exchange.displayName,
-          instagramBusinessId: exchange.instagramUserId,
+          username: exchange.username,
+          name: exchange.displayName,
+          igUserId: exchange.instagramUserId,
+          avatarUrl: exchange.avatarUrl,
+          accountType: exchange.accountType,
+          followersCount: exchange.followersCount,
+          followsCount: exchange.followsCount,
+          mediaCount: exchange.mediaCount,
+          biography: exchange.biography,
+          website: exchange.website,
+          loginMode: 'instagram',
           accessToken: exchange.accessToken,
           tokenExpiresAt: new Date(Date.now() + exchange.expiresIn * 1000),
+          lastRefreshedAt: new Date(),
+          scopes,
           status: 'active',
-          capabilities: ['messages', 'comments', 'mentions', 'insights'],
+          statusReason: null,
         },
         $setOnInsert: {
           _id: accountId,
           dailyDmLimit: 2500,
+          connectedAt: new Date(),
         },
       },
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true, returnDocument: 'after', runValidators: true }
     );
+
+    // Subscribe to webhooks immediately — without this the account is connected
+    // but completely inert: no comment or DM ever reaches the automations.
+    const sub = await MetaService.subscribeWebhooks(exchange.instagramUserId, exchange.accessToken);
+    if (sub.success) {
+      await models.SocialAccount.updateOne(
+        { _id: account?._id ?? accountId },
+        { $set: { webhookSubscribed: true, lastSyncAt: new Date() } }
+      );
+      console.log(`[Instagram Login] Webhooks subscribed for @${exchange.username}`);
+    } else {
+      console.warn(`[Instagram Login] Webhook subscribe failed for @${exchange.username}:`, sub.error);
+    }
 
     console.log(`[Instagram Login] Successfully authorized and connected: @${exchange.username}`);
 

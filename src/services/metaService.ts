@@ -24,6 +24,14 @@ export interface MetaSendDmOptions {
   text?: string;
   buttons?: Array<{ title: string; payload?: string; url?: string }>;
   tag?: 'HUMAN_AGENT';
+  /**
+   * Send as a private reply to this comment instead of a normal DM.
+   *
+   * This matters for the core comment-to-DM flow: Instagram only lets you DM
+   * someone who has messaged you in the last 24h. A commenter usually has not,
+   * so addressing the comment is the only way the first message gets through.
+   */
+  commentId?: string;
 }
 
 export class MetaService {
@@ -43,7 +51,7 @@ export class MetaService {
    * Send Direct Message to an Instagram user via Meta Graph API v21.0
    */
   static async sendDirectMessage(options: MetaSendDmOptions) {
-    const { recipientIgsid, accessToken, text, buttons, tag } = options;
+    const { recipientIgsid, accessToken, text, buttons, tag, commentId } = options;
 
     let messagePayload: Record<string, any> = {};
 
@@ -68,7 +76,7 @@ export class MetaService {
     }
 
     const body: Record<string, any> = {
-      recipient: { id: recipientIgsid },
+      recipient: commentId ? { comment_id: commentId } : { id: recipientIgsid },
       message: messagePayload,
     };
 
@@ -328,25 +336,46 @@ export class MetaService {
     const longLivedToken = longLivedRes.data.access_token;
     const expiresIn = longLivedRes.data.expires_in || 5184000; // 60 days in seconds
 
-    // Step 3: Fetch profile information
+    // Step 3: Fetch profile information.
+    // `user_id` is the Instagram-scoped id the Messaging API addresses; `id` is
+    // the app-scoped id. Store user_id, falling back to id when it is absent.
     let username = `user_${initialUserId}`;
     let displayName = username;
     let instagramUserId = String(initialUserId);
+    let accountType: string | undefined;
+    let avatarUrl: string | undefined;
+    let followersCount = 0;
+    let followsCount = 0;
+    let mediaCount = 0;
+    let biography: string | undefined;
+    let website: string | undefined;
 
     try {
-      const profileRes = await axios.get('https://graph.instagram.com/v21.0/me', {
+      const profileRes = await axios.get(`${INSTAGRAM_GRAPH_BASE}/me`, {
         params: {
-          fields: 'id,username,name,account_type',
+          fields:
+            'user_id,id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count,biography,website',
           access_token: longLivedToken,
         },
       });
-      if (profileRes.data) {
-        instagramUserId = profileRes.data.id || instagramUserId;
-        username = profileRes.data.username || username;
-        displayName = profileRes.data.name || username;
+      const p = profileRes.data;
+      if (p) {
+        instagramUserId = String(p.user_id || p.id || instagramUserId);
+        username = p.username || username;
+        displayName = p.name || username;
+        accountType = p.account_type;
+        avatarUrl = p.profile_picture_url;
+        followersCount = p.followers_count ?? 0;
+        followsCount = p.follows_count ?? 0;
+        mediaCount = p.media_count ?? 0;
+        biography = p.biography;
+        website = p.website;
       }
     } catch (err: any) {
-      console.warn('[MetaService] Could not fetch profile with graph.instagram.com:', err.message);
+      console.warn(
+        '[MetaService] Could not fetch profile from graph.instagram.com:',
+        err.response?.data?.error?.message || err.message,
+      );
     }
 
     return {
@@ -355,6 +384,43 @@ export class MetaService {
       instagramUserId,
       username,
       displayName,
+      accountType,
+      avatarUrl,
+      followersCount,
+      followsCount,
+      mediaCount,
+      biography,
+      website,
     };
+  }
+
+  /**
+   * Subscribe this Instagram account to webhook events. Without this no comment
+   * or DM ever reaches the backend, so no automation can fire.
+   */
+  static async subscribeWebhooks(igUserId: string, accessToken: string) {
+    const fields = [
+      'comments',
+      'live_comments',
+      'messages',
+      'messaging_postbacks',
+      'messaging_seen',
+      'message_reactions',
+      'messaging_referral',
+      'mentions',
+    ].join(',');
+
+    try {
+      const res = await axios.post(
+        `${graphBase(accessToken)}/${igUserId}/subscribed_apps`,
+        null,
+        { params: { subscribed_fields: fields, access_token: accessToken } },
+      );
+      return { success: res.data?.success !== false, data: res.data, fields };
+    } catch (error: any) {
+      const metaError = error.response?.data?.error;
+      console.error('[Meta Graph API] subscribeWebhooks failed:', metaError || error.message);
+      return { success: false, error: metaError?.message || error.message };
+    }
   }
 }

@@ -18,9 +18,21 @@ export class FlowEngine {
   static async processComment(event: WebhookCommentEvent) {
     const { accountId, commentId, userIgsid, username, commentText } = event;
 
-    // 1. Fetch account
-    const account = await models.SocialAccount.findById(accountId);
-    if (!account) return { matched: false, reason: 'Account not found' };
+    // 1. Fetch account.
+    // Meta's webhook identifies the account by its Instagram user id, but the
+    // dashboard and the test simulator pass our own document _id. Accept both,
+    // or every real webhook silently dies here as "Account not found".
+    const account =
+      (await models.SocialAccount.findOne({ igUserId: String(accountId) })) ??
+      (await models.SocialAccount.findById(accountId));
+
+    if (!account) {
+      console.warn(`[FlowEngine] No connected account matches "${accountId}" (igUserId or _id)`);
+      return { matched: false, reason: 'Account not found' };
+    }
+
+    // Automations are stored against our document _id, not the Instagram id.
+    const localAccountId = account._id;
 
     // 2. Check Spam Protection first
     const spamCheck = await AiService.classifySpam(commentText);
@@ -31,14 +43,32 @@ export class FlowEngine {
     }
 
     // 3. Find active automations for this account
-    const automations = await models.Automation.find({
-      accountId,
+    const found = await models.Automation.find({
+      accountId: localAccountId,
       status: 'live',
+    }).lean();
+
+    // A trigger attached to this specific post beats an account-wide one, so a
+    // single post can always override the general rules. Within the same
+    // specificity, higher `priority` wins, then most recently updated.
+    const automations = (found as any[]).sort((a, b) => {
+      const aSpecific = a.mediaIds?.length ? 1 : 0;
+      const bSpecific = b.mediaIds?.length ? 1 : 0;
+      if (aSpecific !== bSpecific) return bSpecific - aSpecific;
+      if ((b.priority ?? 0) !== (a.priority ?? 0)) return (b.priority ?? 0) - (a.priority ?? 0);
+      return new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime();
     });
 
     for (const auto of automations) {
       const trigger = auto.trigger as any;
       if (!trigger) continue;
+
+      // Per-post targeting: an automation with mediaIds only answers comments on
+      // those posts. An empty list means it applies account-wide.
+      const targeted: string[] = (auto as any).mediaIds ?? [];
+      if (targeted.length > 0 && event.mediaId && !targeted.includes(event.mediaId)) {
+        continue;
+      }
 
       let matches = false;
 
@@ -91,7 +121,13 @@ export class FlowEngine {
     event: WebhookCommentEvent,
     account: any
   ) {
-    const steps: any[] = automation.steps || [];
+    // The builder saves actions under `flow.nodes`; older records used `steps`.
+    // Reading only `steps` meant a matching automation executed nothing at all.
+    const steps: any[] = automation.flow?.nodes ?? automation.steps ?? [];
+
+    if (steps.length === 0) {
+      console.warn(`[FlowEngine] Automation "${automation.name}" matched but has no actions defined`);
+    }
 
     for (const step of steps) {
       // Action 1: Public Comment Auto-Reply
@@ -104,7 +140,7 @@ export class FlowEngine {
       // Action 2: Ask for Follow (Follower-Gating)
       if (step.type === 'ask_for_follow') {
         const isFollowing = await MetaService.checkFollowerStatus(
-          account.instagramBusinessId,
+          account.igUserId,
           event.userIgsid,
           account.accessToken
         );
@@ -127,12 +163,21 @@ export class FlowEngine {
 
       // Action 3: Send Direct Message / Resource Link
       if (step.type === 'send_dm') {
-        await MetaService.sendDirectMessage({
+        // Address the comment, not the user: a commenter has almost never
+        // messaged us first, so a plain DM would be rejected by Instagram.
+        const result = await MetaService.sendDirectMessage({
           recipientIgsid: event.userIgsid,
+          commentId: event.commentId,
           accessToken: account.accessToken,
           text: step.text || 'Here is your requested link! Enjoy! 🚀',
           buttons: step.buttons || [],
         });
+
+        if (!result.success) {
+          console.error(`[FlowEngine] DM failed for @${event.username}:`, result.error);
+        } else {
+          console.log(`[FlowEngine] DM sent to @${event.username}`);
+        }
       }
     }
 

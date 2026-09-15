@@ -19,6 +19,7 @@ import bioRoutes from './routes/bio.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import settingsRoutes from './routes/settings.routes.js';
 import metaRoutes from './routes/meta.routes.js';
+import mediaRoutes from './routes/media.routes.js';
 
 export const app = express();
 
@@ -79,6 +80,7 @@ app.use('/api/bio', bioRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/meta', metaRoutes);
+app.use('/api/media', mediaRoutes);
 
 // Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
