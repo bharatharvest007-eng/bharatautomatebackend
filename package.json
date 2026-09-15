@@ -1,0 +1,33 @@
+{
+  "name": "@sma/backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Live Node.js Express backend for Social Media Automation (SendDM clone)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "db:wipe": "tsx src/scripts/wipeDb.ts",
+    "db:init": "tsx src/scripts/initAdmin.ts",
+    "tunnel": "node scripts/tunnel.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
+    "axios": "^1.20.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.3",
+    "mongoose": "^8.24.4",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.2",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3"
+  }
+}
