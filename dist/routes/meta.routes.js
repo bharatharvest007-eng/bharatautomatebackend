@@ -95,7 +95,7 @@ router.post('/test-webhook', async (req, res) => {
 // Ref: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login
 router.get('/oauth/url', (req, res) => {
     const appId = process.env.META_APP_ID || process.env.INSTAGRAM_APP_ID;
-    const redirectUri = process.env.META_REDIRECT_URI || 'http://localhost:5000/api/meta/oauth/callback';
+    const redirectUri = process.env.META_REDIRECT_URI || 'https://bharatautomatebackend.onrender.com/api/meta/oauth/callback';
     if (!appId) {
         return res.json({
             ok: false,
@@ -121,7 +121,7 @@ router.get('/oauth/callback', async (req, res) => {
     const error = req.query.error;
     const errorReason = req.query.error_reason;
     const errorDescription = req.query.error_description;
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://bharatautomatefrontend.vercel.app';
     if (error || !code) {
         console.error('[Instagram Login] Authorization rejected or failed:', error, errorDescription);
         return res.redirect(`${frontendUrl}/accounts?error=${encodeURIComponent(errorDescription || error || 'Authorization cancelled')}`);
@@ -129,7 +129,7 @@ router.get('/oauth/callback', async (req, res) => {
     try {
         const appId = process.env.META_APP_ID || process.env.INSTAGRAM_APP_ID || '';
         const appSecret = process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || '';
-        const redirectUri = process.env.META_REDIRECT_URI || 'http://localhost:5000/api/meta/oauth/callback';
+        const redirectUri = process.env.META_REDIRECT_URI || 'https://bharatautomatebackend.onrender.com/api/meta/oauth/callback';
         const exchange = await MetaService.exchangeInstagramCode({
             code: code.replace(/#_$/, ''), // Instagram appends #_ to auth codes
             appId,
