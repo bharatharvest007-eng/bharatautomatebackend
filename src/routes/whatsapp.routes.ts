@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as models from '../models/index.js';
 import { WhatsAppService } from '../services/whatsappService.js';
+import { classifyTemplate } from '../models/WhatsAppTemplate.js';
 
 /**
  * WhatsApp Business Cloud API connection + template management.
@@ -143,7 +144,19 @@ router.post('/:accountId/templates/sync', async (req, res) => {
     if (!result.success) return res.status(502).json({ error: result.error });
 
     let synced = 0;
+    const byKind: Record<string, number> = {};
+
     for (const t of result.templates) {
+      const components = t.components || [];
+      // Meta nests a carousel's cards inside its CAROUSEL component; we hoist
+      // them to a top-level field so the template picker can render/filter
+      // carousels without digging through the component tree every time.
+      const carouselComponent = components.find((c: any) => c.type === 'CAROUSEL');
+      const cards = carouselComponent?.cards || [];
+
+      const { kind, headerFormat, buttonTypes, variableCount } = classifyTemplate(t.category, components);
+      byKind[kind] = (byKind[kind] || 0) + 1;
+
       await models.WhatsAppTemplate.findOneAndUpdate(
         { accountId: account._id, name: t.name, language: t.language },
         {
@@ -154,8 +167,13 @@ router.post('/:accountId/templates/sync', async (req, res) => {
             name: t.name,
             language: t.language,
             category: t.category,
+            kind,
             status: t.status,
-            components: t.components || [],
+            components,
+            cards,
+            variableCount,
+            headerFormat,
+            buttonTypes,
             rejectedReason: t.rejected_reason,
             lastSyncedAt: new Date(),
           },
@@ -166,7 +184,7 @@ router.post('/:accountId/templates/sync', async (req, res) => {
       synced += 1;
     }
 
-    return res.json({ ok: true, synced });
+    return res.json({ ok: true, synced, byKind });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -187,8 +205,23 @@ router.get('/:accountId/templates', async (req, res) => {
 
 router.post('/:accountId/send-test', async (req, res) => {
   try {
-    const { to, templateName, language } = req.body;
-    if (!to) return res.status(400).json({ error: '"to" (a phone number, digits only, country code first) is required' });
+    const { to: rawTo, templateName, language } = req.body;
+    if (!rawTo) return res.status(400).json({ error: '"to" (a phone number, digits only, country code first) is required' });
+
+    // Meta matches the recipient against its own allow-list (for test
+    // numbers) and its own account record byte-for-byte on the digit string —
+    // "9390438443" and "919390438443" are different values to that check even
+    // though a human reads them as the same number. Strip everything but
+    // digits so spaces/dashes/parens/a leading "+" never cause a false
+    // mismatch, then catch the single most common real mistake — forgetting
+    // the country code — with an error that says so, instead of letting it
+    // travel to Meta and come back as an opaque "not in allowed list".
+    const to = String(rawTo).replace(/\D/g, '');
+    if (to.length <= 10) {
+      return res.status(400).json({
+        error: `"${rawTo}" looks like it's missing a country code — WhatsApp needs the full number (e.g. 91 + 9390438443 for India → 919390438443), with no + or spaces. This must also match exactly how the number is registered as a test recipient in Meta's console.`,
+      });
+    }
 
     const account = await models.SocialAccount.findById(req.params.accountId);
     if (!account || account.platform !== 'whatsapp') return res.status(404).json({ error: 'WhatsApp account not found' });
@@ -200,7 +233,7 @@ router.post('/:accountId/send-test', async (req, res) => {
       ? await WhatsAppService.sendTemplate(account.phoneNumberId!, to, templateName, language || 'en_US', account.accessToken)
       : await WhatsAppService.sendTemplate(account.phoneNumberId!, to, 'hello_world', 'en_US', account.accessToken);
 
-    return res.json({ ok: result.success, result });
+    return res.json({ ok: result.success, result, normalizedTo: to });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }

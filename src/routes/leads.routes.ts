@@ -3,11 +3,21 @@ import * as models from '../models/index.js';
 
 const router = Router();
 
-// List captured leads
+// List captured leads — optionally scoped to one platform (e.g. WhatsApp) or one account.
 router.get('/', async (req, res) => {
   try {
-    const leads = await models.LeadSubmission.find().sort({ createdAt: -1 }).limit(200);
-    const total = await models.LeadSubmission.countDocuments();
+    const { platform, accountId } = req.query;
+    const query: Record<string, unknown> = {};
+
+    if (accountId) {
+      query.accountId = accountId;
+    } else if (platform) {
+      const accounts = await models.SocialAccount.find({ platform: String(platform) }, { _id: 1 }).lean();
+      query.accountId = { $in: accounts.map((a: any) => a._id) };
+    }
+
+    const leads = await models.LeadSubmission.find(query).sort({ createdAt: -1 }).limit(200);
+    const total = await models.LeadSubmission.countDocuments(query);
     return res.json({ ok: true, leads, total });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });

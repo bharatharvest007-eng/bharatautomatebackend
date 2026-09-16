@@ -25,6 +25,7 @@ import facebookRoutes from './routes/facebook.routes.js';
 import broadcastsRoutes from './routes/broadcasts.routes.js';
 import widgetRoutes from './routes/widget.routes.js';
 import remindersRoutes from './routes/reminders.routes.js';
+import crossChannelRoutes from './routes/crossChannel.routes.js';
 
 export const app = express();
 
@@ -91,6 +92,7 @@ app.use('/api/facebook', facebookRoutes);
 app.use('/api/broadcasts', broadcastsRoutes);
 app.use('/api/widget', widgetRoutes);
 app.use('/api/reminders', remindersRoutes);
+app.use('/api/cross-channel', crossChannelRoutes);
 
 // Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
