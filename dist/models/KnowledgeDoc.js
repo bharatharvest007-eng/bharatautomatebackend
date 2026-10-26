@@ -2,6 +2,7 @@ import mongoose, { Schema, model } from 'mongoose';
 const KnowledgeDocSchema = new Schema({
     _id: { type: String, required: true },
     orgId: { type: String, required: true, index: true },
+    accountId: { type: String, index: true },
     title: { type: String, required: true },
     content: { type: String, required: true },
     source: { type: String, default: 'manual' },
@@ -9,6 +10,8 @@ const KnowledgeDocSchema = new Schema({
     chunks: { type: [Schema.Types.Mixed], default: [] },
     enabled: { type: Boolean, default: true },
     tokens: { type: Number, default: 0 },
+    status: { type: String, default: 'ready', enum: ['ready', 'processing', 'error'] },
+    error: { type: String },
 }, {
     timestamps: true,
     _id: false,

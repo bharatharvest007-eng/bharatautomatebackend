@@ -1,6 +1,7 @@
 import mongoose, { Schema, model } from 'mongoose';
 const JobSchema = new Schema({
     _id: { type: String, required: true },
+    orgId: { type: String, index: true },
     queue: { type: String, required: true, index: true },
     name: { type: String, required: true },
     payload: { type: Schema.Types.Mixed, default: {} },
@@ -30,4 +31,6 @@ const JobSchema = new Schema({
     },
 });
 JobSchema.index({ status: 1, runAt: 1, priority: -1 });
+JobSchema.index({ status: 1, priority: -1, runAt: 1 });
+JobSchema.index({ status: 1, lockExpiresAt: 1 });
 export const Job = mongoose.models.Job || model('Job', JobSchema);

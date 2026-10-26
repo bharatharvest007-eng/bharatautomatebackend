@@ -24,6 +24,9 @@ const MessageSchema = new Schema({
     sentByUserId: { type: String },
     isEcho: { type: Boolean, default: false },
     messageTag: { type: String },
+    aiGenerated: { type: Boolean, default: false },
+    approvalId: { type: String },
+    source: { type: String },
 }, {
     timestamps: { createdAt: true, updatedAt: false },
     _id: false,

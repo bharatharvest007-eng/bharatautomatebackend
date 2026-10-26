@@ -1,6 +1,7 @@
 import mongoose, { Schema, model } from 'mongoose';
 const LinkClickSchema = new Schema({
     _id: { type: String, required: true },
+    orgId: { type: String, required: true, index: true },
     linkId: { type: String, required: true, index: true },
     contactId: { type: String, index: true },
     messageId: { type: String },
@@ -22,4 +23,5 @@ const LinkClickSchema = new Schema({
     },
 });
 LinkClickSchema.index({ linkId: 1, createdAt: -1 });
+LinkClickSchema.index({ orgId: 1, createdAt: -1 });
 export const LinkClick = mongoose.models.LinkClick || model('LinkClick', LinkClickSchema);

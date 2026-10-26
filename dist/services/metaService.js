@@ -1,25 +1,44 @@
 import axios from 'axios';
 import crypto from 'crypto';
-const GRAPH_API_BASE = 'https://graph.facebook.com/v21.0';
+const GRAPH_VERSION = 'v21.0';
+const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
+const INSTAGRAM_GRAPH_BASE = `https://graph.instagram.com/${GRAPH_VERSION}`;
+/**
+ * Pick the right Graph host for a token.
+ *
+ * Tokens issued by Instagram Business Login are only valid against
+ * graph.instagram.com; Page access tokens from Facebook Login are only valid
+ * against graph.facebook.com. Calling the wrong host fails with a confusing
+ * OAuth error, so we route on the token's own prefix: Instagram user tokens
+ * start with "IG", Facebook/Page tokens with "EAA".
+ */
+function graphBase(accessToken) {
+    return accessToken?.startsWith('IG') ? INSTAGRAM_GRAPH_BASE : GRAPH_API_BASE;
+}
 export class MetaService {
     /**
      * Verify signature on incoming Meta Webhooks (X-Hub-Signature-256)
+     */
+    /**
+     * Checks Meta's X-Hub-Signature-256 header against the exact request bytes
+     * (`req.rawBody`). Re-serialising the parsed JSON doesn't reproduce Meta's
+     * bytes (escaping, key order), so it must be the raw body. A malformed
+     * header is simply invalid, never an exception.
      */
     static verifySignature(payload, signatureHeader, appSecret) {
         if (!signatureHeader || !appSecret)
             return false;
         const [algo, signature] = signatureHeader.split('=');
-        if (algo !== 'sha256' || !signature)
+        if (algo !== 'sha256' || !signature || !/^[0-9a-f]{64}$/i.test(signature))
             return false;
-        const hmac = crypto.createHmac('sha256', appSecret);
-        const digest = hmac.update(payload, 'utf8').digest('hex');
-        return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(digest, 'hex'));
+        const digest = crypto.createHmac('sha256', appSecret).update(payload).digest();
+        return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), digest);
     }
     /**
      * Send Direct Message to an Instagram user via Meta Graph API v21.0
      */
     static async sendDirectMessage(options) {
-        const { recipientIgsid, accessToken, text, buttons, tag } = options;
+        const { recipientIgsid, accessToken, text, buttons, tag, commentId } = options;
         let messagePayload = {};
         if (buttons && buttons.length > 0) {
             messagePayload = {
@@ -42,7 +61,7 @@ export class MetaService {
             messagePayload = { text: text || '' };
         }
         const body = {
-            recipient: { id: recipientIgsid },
+            recipient: commentId ? { comment_id: commentId } : { id: recipientIgsid },
             message: messagePayload,
         };
         if (tag === 'HUMAN_AGENT') {
@@ -50,7 +69,7 @@ export class MetaService {
             body.tag = 'HUMAN_AGENT';
         }
         try {
-            const response = await axios.post(`${GRAPH_API_BASE}/me/messages`, body, {
+            const response = await axios.post(`${graphBase(accessToken)}/me/messages`, body, {
                 params: { access_token: accessToken },
                 headers: { 'Content-Type': 'application/json' },
             });
@@ -72,7 +91,7 @@ export class MetaService {
      */
     static async replyToComment(commentId, message, accessToken) {
         try {
-            const response = await axios.post(`${GRAPH_API_BASE}/${commentId}/replies`, { message }, { params: { access_token: accessToken } });
+            const response = await axios.post(`${graphBase(accessToken)}/${commentId}/replies`, { message }, { params: { access_token: accessToken } });
             return { success: true, data: response.data };
         }
         catch (error) {
@@ -85,7 +104,7 @@ export class MetaService {
      */
     static async sendPrivateCommentReply(commentId, message, accessToken) {
         try {
-            const response = await axios.post(`${GRAPH_API_BASE}/me/messages`, {
+            const response = await axios.post(`${graphBase(accessToken)}/me/messages`, {
                 recipient: { comment_id: commentId },
                 message: { text: message },
             }, { params: { access_token: accessToken } });
@@ -102,11 +121,11 @@ export class MetaService {
     static async hideOrDeleteComment(commentId, action, accessToken) {
         try {
             if (action === 'hide') {
-                const response = await axios.post(`${GRAPH_API_BASE}/${commentId}`, { hide: true }, { params: { access_token: accessToken } });
+                const response = await axios.post(`${graphBase(accessToken)}/${commentId}`, { hide: true }, { params: { access_token: accessToken } });
                 return { success: true, data: response.data };
             }
             else {
-                const response = await axios.delete(`${GRAPH_API_BASE}/${commentId}`, {
+                const response = await axios.delete(`${graphBase(accessToken)}/${commentId}`, {
                     params: { access_token: accessToken },
                 });
                 return { success: true, data: response.data };
@@ -121,7 +140,7 @@ export class MetaService {
      */
     static async checkFollowerStatus(businessIgsid, userIgsid, accessToken) {
         try {
-            const res = await axios.get(`${GRAPH_API_BASE}/${businessIgsid}`, {
+            const res = await axios.get(`${graphBase(accessToken)}/${businessIgsid}`, {
                 params: {
                     fields: `user_profile{is_user_follow_business,is_business_follow_user}`,
                     access_token: accessToken,
@@ -143,7 +162,7 @@ export class MetaService {
                 question: ib.question,
                 payload: ib.payload || ib.question,
             }));
-            const res = await axios.post(`${GRAPH_API_BASE}/me/messenger_profile`, {
+            const res = await axios.post(`${graphBase(accessToken)}/me/messenger_profile`, {
                 ice_breakers: [
                     {
                         call_to_actions: formatted,
@@ -168,7 +187,7 @@ export class MetaService {
                 }
                 return { type: 'postback', title: item.title, payload: item.payload || item.title };
             });
-            const res = await axios.post(`${GRAPH_API_BASE}/me/messenger_profile`, {
+            const res = await axios.post(`${graphBase(accessToken)}/me/messenger_profile`, {
                 persistent_menu: [
                     {
                         locale: 'default',
@@ -188,7 +207,7 @@ export class MetaService {
      */
     static async validateToken(accessToken) {
         try {
-            const res = await axios.get(`${GRAPH_API_BASE}/me`, {
+            const res = await axios.get(`${graphBase(accessToken)}/me`, {
                 params: {
                     fields: 'id,name,username',
                     access_token: accessToken,
@@ -204,14 +223,17 @@ export class MetaService {
      * Build direct Instagram Login Authorization URL
      * Ref: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login
      */
+    /** Scopes every install needs. Content publishing is opt-in because it must be
+     *  added separately under Permissions and features before it can be requested —
+     *  asking for a scope the app does not have breaks the consent dialog. */
+    static DEFAULT_INSTAGRAM_SCOPES = [
+        'instagram_business_basic',
+        'instagram_business_manage_messages',
+        'instagram_business_manage_comments',
+    ];
     static buildInstagramLoginUrl(options) {
         const { appId, redirectUri, state = 'sma_ig_login' } = options;
-        const scopes = [
-            'instagram_business_basic',
-            'instagram_business_manage_messages',
-            'instagram_business_manage_comments',
-            'instagram_business_content_publish',
-        ].join(',');
+        const scopes = (options.scopes?.length ? options.scopes : MetaService.DEFAULT_INSTAGRAM_SCOPES).join(',');
         const params = new URLSearchParams({
             enable_fb_login: '0', // Forces native Instagram login dialog (no Facebook login required)
             force_authentication: '1',
@@ -250,25 +272,42 @@ export class MetaService {
         });
         const longLivedToken = longLivedRes.data.access_token;
         const expiresIn = longLivedRes.data.expires_in || 5184000; // 60 days in seconds
-        // Step 3: Fetch profile information
+        // Step 3: Fetch profile information.
+        // `user_id` is the Instagram-scoped id the Messaging API addresses; `id` is
+        // the app-scoped id. Store user_id, falling back to id when it is absent.
         let username = `user_${initialUserId}`;
         let displayName = username;
         let instagramUserId = String(initialUserId);
+        let accountType;
+        let avatarUrl;
+        let followersCount = 0;
+        let followsCount = 0;
+        let mediaCount = 0;
+        let biography;
+        let website;
         try {
-            const profileRes = await axios.get('https://graph.instagram.com/v21.0/me', {
+            const profileRes = await axios.get(`${INSTAGRAM_GRAPH_BASE}/me`, {
                 params: {
-                    fields: 'id,username,name,account_type',
+                    fields: 'user_id,id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count,biography,website',
                     access_token: longLivedToken,
                 },
             });
-            if (profileRes.data) {
-                instagramUserId = profileRes.data.id || instagramUserId;
-                username = profileRes.data.username || username;
-                displayName = profileRes.data.name || username;
+            const p = profileRes.data;
+            if (p) {
+                instagramUserId = String(p.user_id || p.id || instagramUserId);
+                username = p.username || username;
+                displayName = p.name || username;
+                accountType = p.account_type;
+                avatarUrl = p.profile_picture_url;
+                followersCount = p.followers_count ?? 0;
+                followsCount = p.follows_count ?? 0;
+                mediaCount = p.media_count ?? 0;
+                biography = p.biography;
+                website = p.website;
             }
         }
         catch (err) {
-            console.warn('[MetaService] Could not fetch profile with graph.instagram.com:', err.message);
+            console.warn('[MetaService] Could not fetch profile from graph.instagram.com:', err.response?.data?.error?.message || err.message);
         }
         return {
             accessToken: longLivedToken,
@@ -276,6 +315,113 @@ export class MetaService {
             instagramUserId,
             username,
             displayName,
+            accountType,
+            avatarUrl,
+            followersCount,
+            followsCount,
+            mediaCount,
+            biography,
+            website,
         };
+    }
+    /**
+     * Subscribe this Instagram account to webhook events. Without this no comment
+     * or DM ever reaches the backend, so no automation can fire.
+     */
+    static async subscribeWebhooks(igUserId, accessToken) {
+        const fields = [
+            'comments',
+            'live_comments',
+            'messages',
+            'messaging_postbacks',
+            'messaging_seen',
+            'message_reactions',
+            'messaging_referral',
+            'mentions',
+        ].join(',');
+        try {
+            const res = await axios.post(`${graphBase(accessToken)}/${igUserId}/subscribed_apps`, null, { params: { subscribed_fields: fields, access_token: accessToken } });
+            return { success: res.data?.success !== false, data: res.data, fields };
+        }
+        catch (error) {
+            const metaError = error.response?.data?.error;
+            console.error('[Meta Graph API] subscribeWebhooks failed:', metaError || error.message);
+            return { success: false, error: metaError?.message || error.message };
+        }
+    }
+    // ===========================================================================
+    // Facebook Pages
+    //
+    // A Facebook Page is reached through the *same* Graph API surface as
+    // Instagram — same Send API shape, same comment endpoints — the only real
+    // differences are the host (graph.facebook.com, already the default) and
+    // that a Page's token comes from listing /me/accounts rather than a direct
+    // OAuth exchange. Sending/replying reuses sendDirectMessage/replyToComment
+    // above unchanged once we hold a Page access token.
+    // ===========================================================================
+    /**
+     * List every Facebook Page a user access token can manage, each with its
+     * own long-lived Page access token — that Page token, not the user token, is
+     * what gets stored on the SocialAccount and used for every later call.
+     */
+    static async discoverFacebookPages(userAccessToken) {
+        try {
+            const res = await axios.get(`${GRAPH_API_BASE}/me/accounts`, {
+                params: {
+                    fields: 'id,name,access_token,category,picture{url},instagram_business_account{id,username}',
+                    access_token: userAccessToken,
+                    limit: 100,
+                },
+            });
+            const pages = (res.data?.data ?? []).map((p) => ({
+                pageId: p.id,
+                pageName: p.name,
+                pageAccessToken: p.access_token,
+                category: p.category,
+                avatarUrl: p.picture?.data?.url,
+                linkedInstagramId: p.instagram_business_account?.id,
+                linkedInstagramUsername: p.instagram_business_account?.username,
+            }));
+            return { success: true, pages };
+        }
+        catch (error) {
+            const metaError = error.response?.data?.error;
+            console.error('[Meta Graph API] discoverFacebookPages failed:', metaError || error.message);
+            return { success: false, error: metaError?.message || error.message, pages: [] };
+        }
+    }
+    /**
+     * Subscribe our app to this Page's messaging + feed events. Page webhooks
+     * are per-Page (unlike Instagram's per-account subscription, the shape is
+     * identical) and use the Page's own token.
+     */
+    static async subscribePageWebhooks(pageId, pageAccessToken) {
+        const fields = ['messages', 'messaging_postbacks', 'messaging_referrals', 'message_reactions', 'feed'].join(',');
+        try {
+            const res = await axios.post(`${GRAPH_API_BASE}/${pageId}/subscribed_apps`, null, { params: { subscribed_fields: fields, access_token: pageAccessToken } });
+            return { success: res.data?.success !== false, data: res.data, fields };
+        }
+        catch (error) {
+            const metaError = error.response?.data?.error;
+            console.error('[Meta Graph API] subscribePageWebhooks failed:', metaError || error.message);
+            return { success: false, error: metaError?.message || error.message };
+        }
+    }
+    /** Fetch a Page's own recent feed posts, for the Posts & Reels board. */
+    static async fetchPagePosts(pageId, pageAccessToken, limit = 25) {
+        try {
+            const res = await axios.get(`${GRAPH_API_BASE}/${pageId}/posts`, {
+                params: {
+                    fields: 'id,message,full_picture,permalink_url,created_time,likes.summary(true),comments.summary(true)',
+                    access_token: pageAccessToken,
+                    limit,
+                },
+            });
+            return { success: true, posts: res.data?.data ?? [] };
+        }
+        catch (error) {
+            const metaError = error.response?.data?.error;
+            return { success: false, error: metaError?.message || error.message, posts: [] };
+        }
     }
 }

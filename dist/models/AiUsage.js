@@ -3,11 +3,15 @@ const AiUsageSchema = new Schema({
     _id: { type: String, required: true },
     orgId: { type: String, required: true, index: true },
     accountId: { type: String, index: true },
+    userId: { type: String },
+    refId: { type: String },
     feature: { type: String, required: true, index: true },
     model: { type: String, required: true },
     inputTokens: { type: Number, default: 0 },
     outputTokens: { type: Number, default: 0 },
     cacheReadTokens: { type: Number, default: 0 },
+    cacheWriteTokens: { type: Number, default: 0 },
+    costUsd: { type: Number, default: 0 },
     credits: { type: Number, default: 0 },
     latencyMs: { type: Number, default: 0 },
     success: { type: Boolean, default: true },
@@ -25,4 +29,5 @@ const AiUsageSchema = new Schema({
     },
 });
 AiUsageSchema.index({ orgId: 1, createdAt: -1 });
+AiUsageSchema.index({ orgId: 1, feature: 1, createdAt: -1 });
 export const AiUsage = mongoose.models.AiUsage || model('AiUsage', AiUsageSchema);

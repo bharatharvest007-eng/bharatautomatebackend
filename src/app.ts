@@ -16,7 +16,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import cookieParser from 'cookie-parser';
 import mongoose from 'mongoose';
 import { securityHeaders, corsAllowlist, publicCors } from './middleware/security.js';
-import { requireAuth, requireSessionAuth } from './middleware/auth.js';
+import { requireAuth, requireSessionAuth, optionalAuth } from './middleware/auth.js';
 import { notFound, sendError } from './lib/http.js';
 import { jobWorkerRunning } from './services/jobs.js';
 
@@ -147,11 +147,11 @@ app.use('/api/team', requireAuth, requireSessionAuth, teamRoutes);
 app.use('/api/api-keys', requireAuth, requireSessionAuth, apiKeysRoutes);
 app.use('/api/webhook-endpoints', requireAuth, requireSessionAuth, webhookEndpointsRoutes);
 app.use('/api/audit', requireAuth, auditRoutes);
-app.use('/api/knowledge', requireAuth, knowledgeRoutes);
-app.use('/api/approvals', requireAuth, approvalsRoutes);
-app.use('/api/content', requireAuth, contentRoutes);
-app.use('/api/posts', requireAuth, postsRoutes);
-app.use('/api/insights', requireAuth, insightsRoutes);
+app.use('/api/knowledge', optionalAuth, knowledgeRoutes);
+app.use('/api/approvals', optionalAuth, approvalsRoutes);
+app.use('/api/content', optionalAuth, contentRoutes);
+app.use('/api/posts', optionalAuth, postsRoutes);
+app.use('/api/insights', optionalAuth, insightsRoutes);
 app.use('/api/competitors', requireAuth, competitorsRoutes);
 
 // 404 for anything unmatched

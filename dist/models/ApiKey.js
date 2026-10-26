@@ -6,6 +6,7 @@ const ApiKeySchema = new Schema({
     prefix: { type: String, required: true },
     hash: { type: String, required: true, unique: true, index: true },
     scopes: [{ type: String }],
+    createdBy: { type: String },
     lastUsedAt: { type: Date },
     revokedAt: { type: Date },
 }, {

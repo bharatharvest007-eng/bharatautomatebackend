@@ -1,7 +1,7 @@
 import mongoose, { Schema, model } from 'mongoose';
 const MembershipSchema = new Schema({
     orgId: { type: String, required: true, index: true },
-    role: { type: String, default: 'owner', enum: ['owner', 'admin', 'member', 'viewer'] },
+    role: { type: String, default: 'member', enum: ['owner', 'admin', 'member', 'viewer'] },
 }, { _id: false });
 const UserSchema = new Schema({
     _id: { type: String, required: true },
@@ -11,6 +11,7 @@ const UserSchema = new Schema({
     passwordHash: { type: String },
     emailVerified: { type: Date },
     lastLoginAt: { type: Date },
+    lastSeenAt: { type: Date },
     timezone: { type: String, default: 'UTC' },
     locale: { type: String, default: 'en' },
     isSuperAdmin: { type: Boolean, default: false },

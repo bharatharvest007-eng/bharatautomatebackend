@@ -1,7 +1,20 @@
 import { Router } from 'express';
 import * as models from '../models/index.js';
 import { AiService } from '../services/aiService.js';
+import { FarmboxService } from '../services/farmboxService.js';
+import { ClaudeBudgetGuard } from '../services/claudeGuard.js';
 const router = Router();
+const DEFAULT_FARMBOX_VOICE = {
+    personaName: 'Farm Box Fresh Grocery Concierge',
+    tone: 'Fresh, appetizing, farm-to-table, helpful, bilingual (Telugu & English)',
+    guidelines: 'Reply concisely (1-2 sentences). Share fresh harvest details, vegetable box pricing (₹399 Weekly Box), morning/evening delivery slots, and direct cart links. Reply in Telugu if the user writes in Telugu.',
+    sampleReplies: [
+        'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల బాక్స్ (₹399) వివరాలు మరియు 1-క్లిక్ ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦🧺',
+        'Our farm-fresh Weekly Veg Box is harvested today and delivered morning (6-9 AM)! DMing you the cart link right now! 🌿✨',
+        'Just sent you the "Cook the Harvest" recipe card and ingredients cart straight to your DMs! 👨‍🍳🍲',
+    ],
+    forbiddenWords: ['crypto', 'invest', 'click link in bio', 'affiliate'],
+};
 // Get Brand Voice settings
 router.get('/brand-voice', async (req, res) => {
     try {
@@ -9,16 +22,7 @@ router.get('/brand-voice', async (req, res) => {
         const voice = await models.BrandVoice.findOne(org ? { orgId: org._id } : {});
         return res.json({
             ok: true,
-            brandVoice: voice || {
-                personaName: 'Creator Studio Voice',
-                tone: 'Warm, engaging, and enthusiastic',
-                guidelines: 'Reply concisely with 1 emoji. Always offer clear value and encourage DMs.',
-                sampleReplies: [
-                    'Thank you so much! Sending you the full link right now in DMs! 🚀',
-                    'Appreciate you checking out the video! Check your inbox for the guide ✨',
-                ],
-                forbiddenWords: ['crypto', 'invest', 'click link in bio'],
-            },
+            brandVoice: voice || DEFAULT_FARMBOX_VOICE,
         });
     }
     catch (error) {
@@ -33,11 +37,11 @@ router.put('/brand-voice', async (req, res) => {
         const orgId = org ? org._id : 'org_workspace';
         const voice = await models.BrandVoice.findOneAndUpdate({ orgId }, {
             $set: {
-                personaName,
-                tone,
-                guidelines,
-                sampleReplies,
-                forbiddenWords,
+                personaName: personaName || DEFAULT_FARMBOX_VOICE.personaName,
+                tone: tone || DEFAULT_FARMBOX_VOICE.tone,
+                guidelines: guidelines || DEFAULT_FARMBOX_VOICE.guidelines,
+                sampleReplies: sampleReplies || DEFAULT_FARMBOX_VOICE.sampleReplies,
+                forbiddenWords: forbiddenWords || DEFAULT_FARMBOX_VOICE.forbiddenWords,
             },
         }, { upsert: true, returnDocument: 'after' });
         return res.json({ ok: true, brandVoice: voice });
@@ -54,8 +58,28 @@ router.post('/test-reply', async (req, res) => {
             return res.status(400).json({ error: 'Comment text is required' });
         const org = await models.Organization.findOne();
         const voice = await models.BrandVoice.findOne(org ? { orgId: org._id } : {});
-        const result = await AiService.generateCommentReply(commentText, postCaption || '', voice || {});
-        return res.json({ ok: true, ...result });
+        const result = await AiService.generateCommentReply(commentText, postCaption || '', voice || DEFAULT_FARMBOX_VOICE);
+        return res.json({
+            ok: true,
+            ...result,
+            isTelugu: AiService.isTelugu(commentText),
+        });
+    }
+    catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
+// Recommend vegetable / produce box
+router.post('/recommend-box', (req, res) => {
+    try {
+        const { familySize = 3, vegetarian = true, likesFruits = true } = req.body;
+        const recommendation = AiService.recommendBox(Number(familySize), Boolean(vegetarian), Boolean(likesFruits));
+        const orderLink = FarmboxService.generateOrderLink(recommendation.recommended.id);
+        return res.json({
+            ok: true,
+            ...recommendation,
+            orderLink,
+        });
     }
     catch (error) {
         return res.status(500).json({ error: error.message });
@@ -74,17 +98,12 @@ router.post('/classify-spam', async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 });
-// AI Usage stats
-router.get('/stats', async (req, res) => {
+// Claude $3.00 Budget Guard status
+router.get('/budget', async (req, res) => {
     try {
-        const totalAiTokens = await models.AiUsage.countDocuments();
         return res.json({
             ok: true,
-            stats: {
-                totalRepliesGenerated: totalAiTokens,
-                spamCommentsBlocked: 0,
-                creditsRemaining: 'Unlimited (Paid Tier)',
-            },
+            budget: ClaudeBudgetGuard.getBudgetStatus(),
         });
     }
     catch (error) {
