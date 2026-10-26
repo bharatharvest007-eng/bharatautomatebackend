@@ -117,10 +117,10 @@ export const env = {
     return str('ANTHROPIC_API_KEY');
   },
   get AI_MODEL(): string {
-    return str('AI_MODEL', 'claude-opus-5-5');
+    return str('AI_MODEL', 'claude-3-5-haiku-20241022');
   },
   get AI_MODEL_FAST(): string {
-    return str('AI_MODEL_FAST', 'claude-haiku-5-5');
+    return str('AI_MODEL_FAST', 'claude-3-5-haiku-20241022');
   },
   /** USD value of one AI credit (raw model cost). */
   get AI_CREDIT_USD(): number {

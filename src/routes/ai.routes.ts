@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as models from '../models/index.js';
 import { AiService } from '../services/aiService.js';
 import { FarmboxService } from '../services/farmboxService.js';
+import { ClaudeBudgetGuard } from '../services/claudeGuard.js';
 
 const router = Router();
 
@@ -114,17 +115,12 @@ router.post('/classify-spam', async (req, res) => {
   }
 });
 
-// AI Usage stats
-router.get('/stats', async (req, res) => {
+// Claude $3.00 Budget Guard status
+router.get('/budget', async (req, res) => {
   try {
-    const totalAiTokens = await models.AiUsage.countDocuments();
     return res.json({
       ok: true,
-      stats: {
-        totalRepliesGenerated: totalAiTokens,
-        spamCommentsBlocked: 0,
-        creditsRemaining: 'Unlimited (Paid Tier)',
-      },
+      budget: ClaudeBudgetGuard.getBudgetStatus(),
     });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });

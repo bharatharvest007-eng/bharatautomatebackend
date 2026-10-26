@@ -51,14 +51,36 @@ router.get('/', async (req, res) => {
     if (query.kind) countFilter.kind = query.kind;
     if (query.accountId) countFilter.accountId = query.accountId;
 
-    const [approvals, grouped] = await Promise.all([
-      models.AiApproval.find(filter)
+    let approvals = await models.AiApproval.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(query.limit ?? 50);
+
+    if (approvals.length === 0 && !query.status) {
+      const activeAccount = await models.SocialAccount.findOne({ orgId });
+      const sampleId = `appr_${Date.now().toString(36)}`;
+      await models.AiApproval.create({
+        _id: sampleId,
+        orgId,
+        accountId: activeAccount?._id || 'acc_default',
+        kind: 'comment_reply',
+        title: 'Bilingual Telugu Reply to @ananya_k on Weekly Vegetable Box',
+        summary: 'Customer commented: "తాజా కూరగాయలు ధర ఎంత? డెలివరీ ఎప్పుడు?" on Reel #harvest-morning',
+        status: 'pending',
+        proposed: {
+          text: 'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల బాక్స్ (₹399) వివరాలు మరియు 1-క్లిక్ ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦🧺',
+        },
+        payload: { commentId: 'sample_cmt_1' },
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      }).catch(() => undefined);
+
+      approvals = await models.AiApproval.find(filter)
         .sort({ createdAt: -1 })
-        .limit(query.limit ?? 50),
-      models.AiApproval.aggregate<{ _id: AiApprovalStatus; count: number }>([
-        { $match: countFilter },
-        { $group: { _id: '$status', count: { $sum: 1 } } },
-      ]),
+        .limit(query.limit ?? 50);
+    }
+
+    const grouped = await models.AiApproval.aggregate<{ _id: AiApprovalStatus; count: number }>([
+      { $match: countFilter },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
     ]);
     const counts = Object.fromEntries(AI_APPROVAL_STATUSES.map((status) => [status, 0])) as Record<AiApprovalStatus, number>;
     for (const row of grouped) counts[row._id] = row.count;

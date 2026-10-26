@@ -1,11 +1,8 @@
-import Anthropic from '@anthropic-ai/sdk';
 import dotenv from 'dotenv';
 import { FarmboxService } from './farmboxService.js';
+import { ClaudeBudgetGuard } from './claudeGuard.js';
 
 dotenv.config();
-
-const apiKey = process.env.ANTHROPIC_API_KEY || '';
-const client = apiKey && !apiKey.startsWith('sk-ant-dummy') ? new Anthropic({ apiKey }) : null;
 
 export interface BrandVoiceConfig {
   personaName?: string;
@@ -35,41 +32,10 @@ export class AiService {
     const isTe = this.isTelugu(commentText);
     const cleanComment = commentText.toLowerCase();
 
-    // High-quality contextual fallback if Anthropic Claude API key is not configured yet
-    if (!client) {
-      let reply: string;
-
-      if (isTe) {
-        if (cleanComment.includes('ధర') || cleanComment.includes('రేటు') || cleanComment.includes('ఎంత')) {
-          reply = 'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల బాక్స్ కేవలం ₹399 మాత్రమే. పూర్తి వివరాలు మరియు ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦🧺';
-        } else if (cleanComment.includes('డెలివరీ') || cleanComment.includes('ఎప్పుడు') || cleanComment.includes('టైమ్')) {
-          reply = 'మా తాజా కూరగాయలు రోజూ ఉదయం 6:00 - 9:00 AM మరియు సాయంత్రం 5:00 - 8:00 PM స్లాట్లలో మీ ఇంటికే డెలివరీ అవుతాయి! 🚚🌱';
-        } else if (cleanComment.includes('ఆర్డర్') || cleanComment.includes('కావాలి') || cleanComment.includes('పంపండి')) {
-          reply = 'ధన్యవాదాలు! ఫార్మ్ బాక్స్ 1-క్లిక్ ఆర్డర్ లింక్ మీ మెసేజ్‌లలో పంపాము, చెక్ చేసుకోండి! ✨';
-        } else {
-          reply = 'నమస్తే! ఫార్మ్ బాక్స్ తాజా ఆర్గానిక్ పంటల వివరాలు మీ ఇన్ బాక్స్‌కు పంపాము! 🌿';
-        }
-      } else {
-        if (cleanComment.includes('price') || cleanComment.includes('cost') || cleanComment.includes('rate')) {
-          reply = 'Our Weekly Farm Fresh Vegetable Box is just ₹399 (10-12 curated items)! DMing you the complete price list and 1-click cart link now! 🥦🧺';
-        } else if (cleanComment.includes('delivery') || cleanComment.includes('slot') || cleanComment.includes('time')) {
-          reply = 'We deliver fresh harvest morning (6-9 AM) and evening (5-8 PM) right to your doorstep! Sent you the slot selector in DMs! 🚚🌱';
-        } else if (cleanComment.includes('order') || cleanComment.includes('buy') || cleanComment.includes('box')) {
-          reply = 'Awesome! Sent the direct 1-click order link to your DMs so you can customize your harvest box! ✨';
-        } else if (cleanComment.includes('recipe') || cleanComment.includes('cook')) {
-          reply = 'Sent the "Cook the Harvest" recipe card and ingredients cart straight to your DMs! Happy cooking! 👨‍🍳🍲';
-        } else {
-          reply = 'Thank you for reaching out! Just sent our fresh farm harvest catalog directly to your DMs! 🌿✨';
-        }
-      }
-
-      return { reply, tokensUsed: 42 };
-    }
-
     const availableBoxes = FarmboxService.getCuratedBoxes();
     const boxSummary = availableBoxes.map((b: any) => `${b.name} (${b.nameTe}): ₹${b.priceInr}`).join(', ');
 
-    const systemPrompt = `You are the authentic, warm, and helpful voice of Farm Box (ఫార్మ్ బాక్స్) — a farm-to-table organic grocery and fresh produce brand in India delivering directly to homes.
+    const systemPrompt = `You are the authentic, warm, and helpful voice of Farm Box (ఫార్మ్ బాక్స్) — a farm-to-table organic grocery and fresh produce brand in Hyderabad delivering directly to homes.
 Persona: ${brandVoice.personaName || 'Farm Box Fresh Produce Concierge'}
 Tone: ${brandVoice.tone || 'warm, appetizing, helpful, fresh farm-to-table, bilingual in Telugu & English'}
 Produce & Box Context:
@@ -92,40 +58,53 @@ Forbidden words: ${brandVoice.forbiddenWords?.join(', ') || 'crypto, click bio l
 ${instruction ? `\nExtra instruction: ${instruction}` : ''}
 `;
 
-    try {
-      const response = await client.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 150,
-        temperature: 0.7,
-        system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: `Post context: "${postCaption}"\nCustomer comment: "${commentText}"\nWrite a short, engaging reply:`,
-          },
-        ],
-      });
+    // Execute with Claude Haiku & $3.00 budget guard
+    const aiRes = await ClaudeBudgetGuard.executeMessage({
+      system: systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: `Post context: "${postCaption}"\nCustomer comment: "${commentText}"\nWrite a short, engaging reply:`,
+        },
+      ],
+      maxTokens: 120,
+      context: 'comment_reply',
+    });
 
-      const reply =
-        response.content[0]?.type === 'text'
-          ? response.content[0].text.trim()
-          : isTe
-            ? 'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల వివరాలు మీ ఇన్ బాక్స్‌కు పంపాము! 🥦'
-            : 'Thank you! Sent the fresh harvest details and order link to your DMs! 🥦✨';
-
+    if (aiRes?.text) {
       return {
-        reply,
-        tokensUsed: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0),
-      };
-    } catch (error: any) {
-      console.warn('[AI Service] Claude call failed, falling back:', error.message);
-      return {
-        reply: isTe
-          ? 'నమస్తే! ఫార్మ్ బాక్స్ తాజా పంట వివరాలు మరియు ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦'
-          : 'Thank you! Just sent the fresh farm harvest details and direct order link to your DMs! 🥦✨',
-        tokensUsed: 0,
+        reply: aiRes.text.trim(),
+        tokensUsed: aiRes.inputTokens + aiRes.outputTokens,
       };
     }
+
+    // High-quality contextual offline fallback if budget reached or offline
+    let reply: string;
+    if (isTe) {
+      if (cleanComment.includes('ధర') || cleanComment.includes('రేటు') || cleanComment.includes('ఎంత')) {
+        reply = 'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల బాక్స్ కేవలం ₹399 మాత్రమే. పూర్తి వివరాలు మరియు ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦🧺';
+      } else if (cleanComment.includes('డెలివరీ') || cleanComment.includes('ఎప్పుడు') || cleanComment.includes('టైమ్')) {
+        reply = 'మా తాజా కూరగాయలు రోజూ ఉదయం 6:00 - 9:00 AM మరియు సాయంత్రం 5:00 - 8:00 PM స్లాట్లలో మీ ఇంటికే డెలివరీ అవుతాయి! 🚚🌱';
+      } else if (cleanComment.includes('ఆర్డర్') || cleanComment.includes('కావాలి') || cleanComment.includes('పంపండి')) {
+        reply = 'ధన్యవాదాలు! ఫార్మ్ బాక్స్ 1-క్లిక్ ఆర్డర్ లింక్ మీ మెసేజ్‌లలో పంపాము, చెక్ చేసుకోండి! ✨';
+      } else {
+        reply = 'నమస్తే! ఫార్మ్ బాక్స్ తాజా ఆర్గానిక్ పంటల వివరాలు మీ ఇన్ బాక్స్‌కు పంపాము! 🌿';
+      }
+    } else {
+      if (cleanComment.includes('price') || cleanComment.includes('cost') || cleanComment.includes('rate')) {
+        reply = 'Our Weekly Farm Fresh Vegetable Box is just ₹399 (10-12 curated items)! DMing you the complete price list and 1-click cart link now! 🥦🧺';
+      } else if (cleanComment.includes('delivery') || cleanComment.includes('slot') || cleanComment.includes('time')) {
+        reply = 'We deliver fresh harvest morning (6-9 AM) and evening (5-8 PM) right to your doorstep! Sent you the slot selector in DMs! 🚚🌱';
+      } else if (cleanComment.includes('order') || cleanComment.includes('buy') || cleanComment.includes('box')) {
+        reply = 'Awesome! Sent the direct 1-click order link to your DMs so you can customize your harvest box! ✨';
+      } else if (cleanComment.includes('recipe') || cleanComment.includes('cook')) {
+        reply = 'Sent the "Cook the Harvest" recipe card and ingredients cart straight to your DMs! Happy cooking! 👨‍🍳🍲';
+      } else {
+        reply = 'Thank you for reaching out! Just sent our fresh farm harvest catalog directly to your DMs! 🌿✨';
+      }
+    }
+
+    return { reply, tokensUsed: 0 };
   }
 
   /**
@@ -177,32 +156,31 @@ ${instruction ? `\nExtra instruction: ${instruction}` : ''}
       };
     }
 
-    if (!client) {
-      return { isSpam: false, score: 5, reason: 'Clean comment' };
+    const aiRes = await ClaudeBudgetGuard.executeMessage({
+      messages: [
+        {
+          role: 'user',
+          content: `Analyze this Instagram or Facebook comment: "${commentText}". Return a JSON object with: { "isSpam": boolean, "score": number (0-100), "reason": string }. JSON only.`,
+        },
+      ],
+      maxTokens: 80,
+      temperature: 0,
+      context: 'spam_classification',
+    });
+
+    if (aiRes?.text) {
+      try {
+        const parsed = JSON.parse(aiRes.text);
+        return {
+          isSpam: Boolean(parsed.isSpam),
+          score: Number(parsed.score) || 0,
+          reason: parsed.reason || 'Analyzed by Claude AI',
+        };
+      } catch {
+        // Safe parse fallback
+      }
     }
 
-    try {
-      const response = await client.messages.create({
-        model: 'claude-3-haiku-20240307',
-        max_tokens: 100,
-        temperature: 0,
-        messages: [
-          {
-            role: 'user',
-            content: `Analyze this Instagram or Facebook comment: "${commentText}". Return a JSON object with: { "isSpam": boolean, "score": number (0-100), "reason": string }. JSON only.`,
-          },
-        ],
-      });
-
-      const text = response.content[0]?.type === 'text' ? response.content[0].text : '{}';
-      const parsed = JSON.parse(text);
-      return {
-        isSpam: Boolean(parsed.isSpam),
-        score: Number(parsed.score) || 0,
-        reason: parsed.reason || 'Analyzed by Claude AI',
-      };
-    } catch {
-      return { isSpam: false, score: 10, reason: 'Evaluated safe' };
-    }
+    return { isSpam: false, score: 10, reason: 'Evaluated safe' };
   }
 }
