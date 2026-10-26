@@ -1,5 +1,9 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 
+/**
+ * A user belongs to exactly one workspace (`memberships[0]`). Roles are
+ * 'owner' | 'member'; legacy 'admin' is treated as owner and 'viewer' as member.
+ */
 export interface IMembership {
   orgId: string;
   role: 'owner' | 'admin' | 'member' | 'viewer';
@@ -13,6 +17,7 @@ export interface IUser {
   passwordHash?: string;
   emailVerified?: Date;
   lastLoginAt?: Date;
+  lastSeenAt?: Date;
   timezone: string;
   locale: string;
   isSuperAdmin: boolean;
@@ -24,7 +29,7 @@ export interface IUser {
 const MembershipSchema = new Schema<IMembership>(
   {
     orgId: { type: String, required: true, index: true },
-    role: { type: String, default: 'owner', enum: ['owner', 'admin', 'member', 'viewer'] },
+    role: { type: String, default: 'member', enum: ['owner', 'admin', 'member', 'viewer'] },
   },
   { _id: false },
 );
@@ -38,6 +43,7 @@ const UserSchema = new Schema<IUser>(
     passwordHash: { type: String },
     emailVerified: { type: Date },
     lastLoginAt: { type: Date },
+    lastSeenAt: { type: Date },
     timezone: { type: String, default: 'UTC' },
     locale: { type: String, default: 'en' },
     isSuperAdmin: { type: Boolean, default: false },

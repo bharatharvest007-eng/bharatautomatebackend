@@ -2,6 +2,7 @@ import mongoose, { Schema, model, type Model } from 'mongoose';
 
 export interface IJob {
   _id: string;
+  orgId?: string;
   queue: string;
   name: string;
   payload: Record<string, unknown>;
@@ -24,6 +25,7 @@ export interface IJob {
 const JobSchema = new Schema<IJob>(
   {
     _id: { type: String, required: true },
+    orgId: { type: String, index: true },
     queue: { type: String, required: true, index: true },
     name: { type: String, required: true },
     payload: { type: Schema.Types.Mixed, default: {} },
@@ -56,5 +58,7 @@ const JobSchema = new Schema<IJob>(
 );
 
 JobSchema.index({ status: 1, runAt: 1, priority: -1 });
+JobSchema.index({ status: 1, priority: -1, runAt: 1 });
+JobSchema.index({ status: 1, lockExpiresAt: 1 });
 
 export const Job: Model<IJob> = (mongoose.models.Job as any) || model<IJob>('Job', JobSchema);

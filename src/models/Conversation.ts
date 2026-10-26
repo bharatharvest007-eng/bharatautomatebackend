@@ -1,5 +1,9 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 
+export type ConversationPriority = 'low' | 'normal' | 'high';
+/** 'inherit' follows the account's AI agent mode; 'off' silences the agent for this thread. */
+export type ConversationAgentMode = 'inherit' | 'off';
+
 export interface IConversation {
   _id: string;
   orgId: string;
@@ -24,6 +28,18 @@ export interface IConversation {
   humanAgentUntil?: Date;
   /** instagram | whatsapp | facebook | widget — which channel this thread lives on. */
   platform: string;
+  /** Latest AI classification of the thread (see services/ai/moderation). */
+  intent?: string;
+  /** -1 (negative) … 1 (positive). */
+  sentiment?: number;
+  urgency?: 'low' | 'normal' | 'high';
+  language?: string;
+  priority: ConversationPriority;
+  aiSummary?: string;
+  aiSummaryAt?: Date;
+  /** Website widget: when the visitor last fetched the thread (read receipts for agents). */
+  visitorSeenAt?: Date;
+  agentMode: ConversationAgentMode;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +67,15 @@ const ConversationSchema = new Schema<IConversation>(
     handoverAt: { type: Date },
     humanAgentUntil: { type: Date },
     platform: { type: String, default: 'instagram', index: true },
+    intent: { type: String },
+    sentiment: { type: Number, min: -1, max: 1 },
+    urgency: { type: String, enum: ['low', 'normal', 'high'] },
+    language: { type: String },
+    priority: { type: String, default: 'normal', enum: ['low', 'normal', 'high'] },
+    aiSummary: { type: String },
+    aiSummaryAt: { type: Date },
+    visitorSeenAt: { type: Date },
+    agentMode: { type: String, default: 'inherit', enum: ['inherit', 'off'] },
   },
   {
     timestamps: true,

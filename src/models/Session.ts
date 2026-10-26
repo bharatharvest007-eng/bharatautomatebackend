@@ -3,11 +3,13 @@ import mongoose, { Schema, model, type Model } from 'mongoose';
 export interface ISession {
   _id: string;
   userId: string;
+  /** sha256 hex of the bearer token — the raw token is never stored. */
   token: string;
   orgId?: string;
   userAgent?: string;
   ip?: string;
   expiresAt: Date;
+  lastSeenAt?: Date;
   createdAt: Date;
 }
 
@@ -20,6 +22,7 @@ const SessionSchema = new Schema<ISession>(
     userAgent: { type: String },
     ip: { type: String },
     expiresAt: { type: Date, required: true, index: { expires: 0 } },
+    lastSeenAt: { type: Date },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },

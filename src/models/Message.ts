@@ -25,6 +25,11 @@ export interface IMessage {
   sentByUserId?: string;
   isEcho: boolean;
   messageTag?: string;
+  /** Written by the AI agent / copilot rather than a human or a static flow step. */
+  aiGenerated: boolean;
+  approvalId?: string;
+  /** Which subsystem sent it: inbox | automation | broadcast | agent | api | approval. */
+  source?: string;
   createdAt: Date;
 }
 
@@ -54,6 +59,9 @@ const MessageSchema = new Schema<IMessage>(
     sentByUserId: { type: String },
     isEcho: { type: Boolean, default: false },
     messageTag: { type: String },
+    aiGenerated: { type: Boolean, default: false },
+    approvalId: { type: String },
+    source: { type: String },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },

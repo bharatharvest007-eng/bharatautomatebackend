@@ -1,7 +1,11 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 
+export const WEBHOOK_EVENT_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 export interface IWebhookEvent {
   _id: string;
+  /** Set once the event is routed to a connected account. */
+  orgId?: string;
   platform: string;
   objectId?: string;
   field?: string;
@@ -17,6 +21,7 @@ export interface IWebhookEvent {
 const WebhookEventSchema = new Schema<IWebhookEvent>(
   {
     _id: { type: String, required: true },
+    orgId: { type: String, index: true },
     platform: { type: String, default: 'instagram' },
     objectId: { type: String },
     field: { type: String },
@@ -25,7 +30,7 @@ const WebhookEventSchema = new Schema<IWebhookEvent>(
     status: { type: String, default: 'pending', enum: ['pending', 'processing', 'done', 'failed', 'ignored'], index: true },
     attempts: { type: Number, default: 0 },
     error: { type: String },
-    receivedAt: { type: Date, default: Date.now, index: true },
+    receivedAt: { type: Date, default: Date.now },
     processedAt: { type: Date },
   },
   {
@@ -41,5 +46,10 @@ const WebhookEventSchema = new Schema<IWebhookEvent>(
     },
   },
 );
+
+// Raw payloads contain PII; keep them 30 days. On existing databases the old plain
+// receivedAt_1 index is converted to TTL by `reconcileLegacyIndexes()` (config/db.ts).
+WebhookEventSchema.index({ receivedAt: 1 }, { expireAfterSeconds: WEBHOOK_EVENT_TTL_SECONDS });
+WebhookEventSchema.index({ orgId: 1, receivedAt: -1 });
 
 export const WebhookEvent: Model<IWebhookEvent> = (mongoose.models.WebhookEvent as any) || model<IWebhookEvent>('WebhookEvent', WebhookEventSchema);

@@ -1,5 +1,15 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 
+/**
+ * 'active' is the only status the automation engine processes. 'connected' was
+ * the old schema default (every connect path actually wrote 'active'); the rest
+ * describe why an account stopped working.
+ */
+export type SocialAccountStatus = 'active' | 'connected' | 'paused' | 'expired' | 'disconnected' | 'error' | 'revoked';
+export type SocialAccountHealth = 'ok' | 'warning' | 'error';
+
+export const SOCIAL_ACCOUNT_STATUSES: readonly SocialAccountStatus[] = ['active', 'connected', 'paused', 'expired', 'disconnected', 'error', 'revoked'];
+
 export interface ISocialAccount {
   _id: string;
   orgId: string;
@@ -38,13 +48,18 @@ export interface ISocialAccount {
   /** Commerce Catalog id, once one is connected — needed for catalog/product messages. */
   catalogId?: string;
 
+  /** Encrypted at rest (`encryptSecret`); read only through `accountToken(account)`. */
   accessToken: string;
   refreshToken?: string;
   tokenExpiresAt?: Date;
   lastRefreshedAt?: Date;
   scopes: string[];
-  status: string;
+  status: SocialAccountStatus;
   statusReason?: string;
+  healthStatus: SocialAccountHealth;
+  lastError?: string;
+  tokenRefreshedAt?: Date;
+  lastHealthCheckAt?: Date;
   paused: boolean;
   timezone: string;
   dailyDmLimit?: number;
@@ -92,8 +107,12 @@ const SocialAccountSchema = new Schema<ISocialAccount>(
     tokenExpiresAt: { type: Date },
     lastRefreshedAt: { type: Date },
     scopes: [{ type: String }],
-    status: { type: String, default: 'connected', index: true },
+    status: { type: String, default: 'active', enum: SOCIAL_ACCOUNT_STATUSES, index: true },
     statusReason: { type: String },
+    healthStatus: { type: String, default: 'ok', enum: ['ok', 'warning', 'error'] },
+    lastError: { type: String },
+    tokenRefreshedAt: { type: Date },
+    lastHealthCheckAt: { type: Date },
     paused: { type: Boolean, default: false },
     timezone: { type: String, default: 'UTC' },
     dailyDmLimit: { type: Number },
