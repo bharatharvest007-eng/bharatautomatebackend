@@ -2,6 +2,8 @@ import * as models from '../models/index.js';
 import { MetaService } from './metaService.js';
 import { WhatsAppService } from './whatsappService.js';
 import { AiService } from './aiService.js';
+import { accountToken } from '../lib/crypto.js';
+import { captureLead } from './leads.js';
 import type { AudienceFilter, ButtonAction, FlowNode, MessageContent } from '../types/index.js';
 
 /**
@@ -91,7 +93,7 @@ const instagramAdapter: ChannelAdapter = {
     const buttons = contentToButtons(content);
     const res = await MetaService.sendDirectMessage({
       recipientIgsid: recipientId,
-      accessToken: account.accessToken,
+      accessToken: accountToken(account),
       commentId: opts?.commentId,
       text: contentToText(content),
       buttons,
@@ -99,15 +101,15 @@ const instagramAdapter: ChannelAdapter = {
     return { success: res.success, messageId: res.data?.recipient_id, error: res.error };
   },
   async replyToComment(account, commentId, text) {
-    const res = await MetaService.replyToComment(commentId, text, account.accessToken);
+    const res = await MetaService.replyToComment(commentId, text, accountToken(account));
     return { success: res.success, messageId: res.data?.id, error: res.error };
   },
   async moderateComment(account, commentId, action) {
-    if (action === 'delete') await MetaService.hideOrDeleteComment(commentId, 'delete', account.accessToken);
-    else await MetaService.hideOrDeleteComment(commentId, 'hide', account.accessToken);
+    if (action === 'delete') await MetaService.hideOrDeleteComment(commentId, 'delete', accountToken(account));
+    else await MetaService.hideOrDeleteComment(commentId, 'hide', accountToken(account));
   },
   async checkFollows(account, senderId) {
-    return MetaService.checkFollowerStatus(account.igUserId, senderId, account.accessToken);
+    return MetaService.checkFollowerStatus(account.igUserId, senderId, accountToken(account));
   },
 };
 
@@ -119,7 +121,7 @@ const facebookAdapter: ChannelAdapter = {
     const buttons = contentToButtons(content);
     const res = await MetaService.sendDirectMessage({
       recipientIgsid: recipientId,
-      accessToken: account.accessToken,
+      accessToken: accountToken(account),
       commentId: opts?.commentId,
       text: contentToText(content),
       buttons,
@@ -127,12 +129,12 @@ const facebookAdapter: ChannelAdapter = {
     return { success: res.success, messageId: res.data?.recipient_id, error: res.error };
   },
   async replyToComment(account, commentId, text) {
-    const res = await MetaService.replyToComment(commentId, text, account.accessToken);
+    const res = await MetaService.replyToComment(commentId, text, accountToken(account));
     return { success: res.success, messageId: res.data?.id, error: res.error };
   },
   async moderateComment(account, commentId, action) {
-    if (action === 'delete') await MetaService.hideOrDeleteComment(commentId, 'delete', account.accessToken);
-    else await MetaService.hideOrDeleteComment(commentId, 'hide', account.accessToken);
+    if (action === 'delete') await MetaService.hideOrDeleteComment(commentId, 'delete', accountToken(account));
+    else await MetaService.hideOrDeleteComment(commentId, 'hide', accountToken(account));
   },
   // Facebook Pages have no "follows a Page" concept comparable to Instagram's
   // follower graph — there is no equivalent check to run.
@@ -148,7 +150,7 @@ const whatsappAdapter: ChannelAdapter = {
   },
   async sendContent(account, recipientId, content) {
     if (!account.phoneNumberId) return { success: false, error: 'This WhatsApp account has no phone number configured' };
-    const res = await WhatsAppService.sendContent(account.phoneNumberId, recipientId, content, account.accessToken, account.catalogId);
+    const res = await WhatsAppService.sendContent(account.phoneNumberId, recipientId, content, accountToken(account), account.catalogId);
     return { success: res.success, messageId: res.messageId, error: res.error };
   },
   // No comment concept, no follower concept on WhatsApp.
@@ -465,6 +467,13 @@ export class FlowEngine {
   }
 
   private static async persistInbound(account: any, event: InboundEvent) {
+    const isWhatsApp = event.platform === 'whatsapp';
+    const waPhone = isWhatsApp ? event.senderId : undefined;
+
+    // Detect email or phone in message text
+    const emailMatch = event.text ? event.text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)?.[0] : undefined;
+    const phoneMatch = event.text ? event.text.match(/(\+?91[\-\s]?)?[6-9]\d{9}/)?.[0] : undefined;
+
     const contact = await models.Contact.findOneAndUpdate(
       { accountId: account._id, igsid: event.senderId },
       {
@@ -473,6 +482,9 @@ export class FlowEngine {
           name: event.senderName || event.senderUsername,
           lastSeenAt: new Date(),
           lastInboundAt: new Date(),
+          ...(waPhone ? { phone: waPhone, waId: waPhone } : {}),
+          ...(emailMatch ? { email: emailMatch } : {}),
+          ...(!waPhone && phoneMatch ? { phone: phoneMatch } : {}),
           ...(event.referral ? { referral: event.referral, source: 'ctwa_ad' } : {}),
         },
         $setOnInsert: {
@@ -486,6 +498,20 @@ export class FlowEngine {
       },
       { upsert: true, new: true },
     );
+
+    // Auto-capture lead if contact details detected or if WhatsApp inbound
+    if (emailMatch || phoneMatch || (isWhatsApp && event.kind === 'message')) {
+      captureLead({
+        orgId: account.orgId,
+        accountId: account._id,
+        contactId: contact._id,
+        source: 'dm',
+        email: emailMatch || contact.email,
+        phone: waPhone || phoneMatch || contact.phone,
+        name: event.senderName || event.senderUsername || contact.name,
+        data: { initialMessage: event.text, platform: event.platform },
+      }).catch(() => undefined);
+    }
 
     const conversation = await models.Conversation.findOneAndUpdate(
       { accountId: account._id, contactId: contact._id },
@@ -725,6 +751,29 @@ export class FlowEngine {
     run.context.vars[askNode.saveTo] = event.text;
     delete (run.context.vars as any).__retries;
     await models.Contact.updateOne({ _id: contact._id }, { $set: { [`fields.${askNode.saveTo}`]: event.text } });
+
+    // Auto-capture lead if ask node captured contact details or order preferences
+    const isContactField = ['email', 'phone', 'name', 'address', 'order', 'box'].includes(askNode.saveTo.toLowerCase()) ||
+      askNode.expect === 'email' || askNode.expect === 'phone';
+
+    if (isContactField) {
+      const allVars = { ...(run.context.vars || {}), [askNode.saveTo]: event.text };
+      const emailVal = typeof allVars.email === 'string' ? allVars.email : (askNode.expect === 'email' ? event.text : undefined);
+      const phoneVal = typeof allVars.phone === 'string' ? allVars.phone : (askNode.expect === 'phone' ? event.text : undefined);
+      const nameVal = typeof allVars.name === 'string' ? allVars.name : (contact.name || contact.username);
+
+      captureLead({
+        orgId: account.orgId,
+        accountId: account._id,
+        contactId: contact._id,
+        source: 'ask_node',
+        automationId: automation._id,
+        email: emailVal,
+        phone: phoneVal,
+        name: nameVal,
+        data: allVars,
+      }).catch((e) => console.warn('[FlowEngine] Lead capture from ask node failed:', e.message));
+    }
 
     const nextId = askNode.next;
     if (!nextId) {

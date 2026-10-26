@@ -2,6 +2,7 @@ import mongoose, { Schema, model, type Model } from 'mongoose';
 
 export interface ILinkClick {
   _id: string;
+  orgId: string;
   linkId: string;
   contactId?: string;
   messageId?: string;
@@ -16,6 +17,7 @@ export interface ILinkClick {
 const LinkClickSchema = new Schema<ILinkClick>(
   {
     _id: { type: String, required: true },
+    orgId: { type: String, required: true, index: true },
     linkId: { type: String, required: true, index: true },
     contactId: { type: String, index: true },
     messageId: { type: String },
@@ -40,5 +42,6 @@ const LinkClickSchema = new Schema<ILinkClick>(
 );
 
 LinkClickSchema.index({ linkId: 1, createdAt: -1 });
+LinkClickSchema.index({ orgId: 1, createdAt: -1 });
 
 export const LinkClick: Model<ILinkClick> = (mongoose.models.LinkClick as any) || model<ILinkClick>('LinkClick', LinkClickSchema);

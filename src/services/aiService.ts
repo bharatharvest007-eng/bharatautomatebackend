@@ -1,10 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import dotenv from 'dotenv';
+import { FarmboxService } from './farmboxService.js';
 
 dotenv.config();
 
 const apiKey = process.env.ANTHROPIC_API_KEY || '';
-const client = apiKey ? new Anthropic({ apiKey }) : null;
+const client = apiKey && !apiKey.startsWith('sk-ant-dummy') ? new Anthropic({ apiKey }) : null;
 
 export interface BrandVoiceConfig {
   personaName?: string;
@@ -16,54 +17,91 @@ export interface BrandVoiceConfig {
 
 export class AiService {
   /**
-   * Generate an engaging, authentic Instagram comment reply matching the creator's brand voice
+   * Detects whether text contains Telugu unicode characters
+   */
+  static isTelugu(text: string): boolean {
+    return /[\u0C00-\u0C7F]/.test(text);
+  }
+
+  /**
+   * Generate an engaging, authentic reply matching Farm Box's bilingual grocery voice
    */
   static async generateCommentReply(
     commentText: string,
     postCaption: string = '',
     brandVoice: BrandVoiceConfig = {},
-    /** Extra one-off context from the automation's `ai_reply` node, layered on top of the brand voice. */
     instruction?: string,
   ): Promise<{ reply: string; tokensUsed: number }> {
-    if (!client || apiKey.startsWith('sk-ant-dummy')) {
-      // High-quality contextual fallback if API key is not configured yet
-      const cleanComment = commentText.toLowerCase();
-      let reply = 'Thank you so much! Sending you the details in DM right now! 🚀';
-      if (cleanComment.includes('price') || cleanComment.includes('cost')) {
-        reply = 'Just sent you the full pricing breakdown in your DMs! Check your message requests 📩';
-      } else if (cleanComment.includes('link') || cleanComment.includes('send')) {
-        reply = 'Sent! Check your DMs for the direct access link! ✨';
-      } else if (cleanComment.includes('how') || cleanComment.includes('info')) {
-        reply = 'Great question! DMing you the step-by-step breakdown right now! 🙌';
+    const isTe = this.isTelugu(commentText);
+    const cleanComment = commentText.toLowerCase();
+
+    // High-quality contextual fallback if Anthropic Claude API key is not configured yet
+    if (!client) {
+      let reply: string;
+
+      if (isTe) {
+        if (cleanComment.includes('ధర') || cleanComment.includes('రేటు') || cleanComment.includes('ఎంత')) {
+          reply = 'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల బాక్స్ కేవలం ₹399 మాత్రమే. పూర్తి వివరాలు మరియు ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦🧺';
+        } else if (cleanComment.includes('డెలివరీ') || cleanComment.includes('ఎప్పుడు') || cleanComment.includes('టైమ్')) {
+          reply = 'మా తాజా కూరగాయలు రోజూ ఉదయం 6:00 - 9:00 AM మరియు సాయంత్రం 5:00 - 8:00 PM స్లాట్లలో మీ ఇంటికే డెలివరీ అవుతాయి! 🚚🌱';
+        } else if (cleanComment.includes('ఆర్డర్') || cleanComment.includes('కావాలి') || cleanComment.includes('పంపండి')) {
+          reply = 'ధన్యవాదాలు! ఫార్మ్ బాక్స్ 1-క్లిక్ ఆర్డర్ లింక్ మీ మెసేజ్‌లలో పంపాము, చెక్ చేసుకోండి! ✨';
+        } else {
+          reply = 'నమస్తే! ఫార్మ్ బాక్స్ తాజా ఆర్గానిక్ పంటల వివరాలు మీ ఇన్ బాక్స్‌కు పంపాము! 🌿';
+        }
+      } else {
+        if (cleanComment.includes('price') || cleanComment.includes('cost') || cleanComment.includes('rate')) {
+          reply = 'Our Weekly Farm Fresh Vegetable Box is just ₹399 (10-12 curated items)! DMing you the complete price list and 1-click cart link now! 🥦🧺';
+        } else if (cleanComment.includes('delivery') || cleanComment.includes('slot') || cleanComment.includes('time')) {
+          reply = 'We deliver fresh harvest morning (6-9 AM) and evening (5-8 PM) right to your doorstep! Sent you the slot selector in DMs! 🚚🌱';
+        } else if (cleanComment.includes('order') || cleanComment.includes('buy') || cleanComment.includes('box')) {
+          reply = 'Awesome! Sent the direct 1-click order link to your DMs so you can customize your harvest box! ✨';
+        } else if (cleanComment.includes('recipe') || cleanComment.includes('cook')) {
+          reply = 'Sent the "Cook the Harvest" recipe card and ingredients cart straight to your DMs! Happy cooking! 👨‍🍳🍲';
+        } else {
+          reply = 'Thank you for reaching out! Just sent our fresh farm harvest catalog directly to your DMs! 🌿✨';
+        }
       }
+
       return { reply, tokensUsed: 42 };
     }
 
-    const systemPrompt = `You are the authentic, friendly voice of an Instagram creator.
-Persona: ${brandVoice.personaName || 'Creator Studio'}
-Tone: ${brandVoice.tone || 'warm, engaging, and professional'}
-Rules:
-- Keep it under 2 sentences.
-- Never sound like a robot.
-- Use 1-2 relevant emojis.
-- Invite the commenter to check their DMs or reply with enthusiasm.
+    const availableBoxes = FarmboxService.getCuratedBoxes();
+    const boxSummary = availableBoxes.map((b: any) => `${b.name} (${b.nameTe}): ₹${b.priceInr}`).join(', ');
+
+    const systemPrompt = `You are the authentic, warm, and helpful voice of Farm Box (ఫార్మ్ బాక్స్) — a farm-to-table organic grocery and fresh produce brand in India delivering directly to homes.
+Persona: ${brandVoice.personaName || 'Farm Box Fresh Produce Concierge'}
+Tone: ${brandVoice.tone || 'warm, appetizing, helpful, fresh farm-to-table, bilingual in Telugu & English'}
+Produce & Box Context:
+- Available Boxes: ${boxSummary}
+- Delivery Slots: Morning (6:00 - 9:00 AM) and Evening (5:00 - 8:00 PM)
+- Produce is directly harvested from certified partner farms and delivered in eco-friendly packaging within 12 hours of harvest.
+
+Language Instructions:
+- If the user's comment is in Telugu or contains Telugu script, ALWAYS reply in natural, conversational Telugu script.
+- If in English, reply in friendly English.
+- If Hinglish or mixed, match the user's vibe warmly.
+
+Formatting Rules:
+- Keep the reply concise (1 to 2 sentences max).
+- Never sound like a generic corporate bot. Mention fresh harvest or produce box.
+- Use 1-2 fresh produce emojis (🥦, 🧺, 🥕, 🌿, ✨).
+- Invite them to check their DMs for the cart link or details.
 ${brandVoice.rules ? brandVoice.rules.map((r) => `- ${r}`).join('\n') : ''}
-Forbidden words: ${brandVoice.forbiddenWords?.join(', ') || 'none'}
-${instruction ? `\nExtra instruction for this specific reply: ${instruction}` : ''}
+Forbidden words: ${brandVoice.forbiddenWords?.join(', ') || 'crypto, click bio link'}
+${instruction ? `\nExtra instruction: ${instruction}` : ''}
 `;
 
     try {
       const response = await client.messages.create({
-        // Current flagship model — the previous pin (claude-3-5-sonnet-20241022)
-        // was a retired dated snapshot.
-        model: 'claude-sonnet-5',
+        model: 'claude-3-5-sonnet-20241022',
         max_tokens: 150,
         temperature: 0.7,
         system: systemPrompt,
         messages: [
           {
             role: 'user',
-            content: `Post context: "${postCaption}"\nComment received: "${commentText}"\nWrite a short, engaging reply:`,
+            content: `Post context: "${postCaption}"\nCustomer comment: "${commentText}"\nWrite a short, engaging reply:`,
           },
         ],
       });
@@ -71,7 +109,9 @@ ${instruction ? `\nExtra instruction for this specific reply: ${instruction}` : 
       const reply =
         response.content[0]?.type === 'text'
           ? response.content[0].text.trim()
-          : 'Thank you! Sent you the details in DMs! 🚀';
+          : isTe
+            ? 'నమస్తే! ఫార్మ్ బాక్స్ తాజా కూరగాయల వివరాలు మీ ఇన్ బాక్స్‌కు పంపాము! 🥦'
+            : 'Thank you! Sent the fresh harvest details and order link to your DMs! 🥦✨';
 
       return {
         reply,
@@ -80,10 +120,31 @@ ${instruction ? `\nExtra instruction for this specific reply: ${instruction}` : 
     } catch (error: any) {
       console.warn('[AI Service] Claude call failed, falling back:', error.message);
       return {
-        reply: 'Appreciate your comment! Just sent the link directly to your DMs! 🚀',
+        reply: isTe
+          ? 'నమస్తే! ఫార్మ్ బాక్స్ తాజా పంట వివరాలు మరియు ఆర్డర్ లింక్ మీ ఇన్ బాక్స్‌కు పంపాము! 🥦'
+          : 'Thank you! Just sent the fresh farm harvest details and direct order link to your DMs! 🥦✨',
         tokensUsed: 0,
       };
     }
+  }
+
+  /**
+   * Recommend personalized produce box based on customer preferences or family size
+   */
+  static recommendBox(familySize: number = 3, _vegetarian: boolean = true, likesFruits: boolean = true) {
+    const boxes = FarmboxService.getCuratedBoxes();
+    if (likesFruits && familySize >= 4) {
+      return {
+        recommended: boxes.find((b: any) => b.id === 'box_organic_fruits') || boxes[0],
+        secondary: boxes.find((b: any) => b.id === 'box_weekly_fresh'),
+        reason: 'Ideal for medium/large families looking for both daily cooking essentials and immune-boosting fresh fruits.',
+      };
+    }
+    return {
+      recommended: boxes.find((b: any) => b.id === 'box_weekly_fresh') || boxes[0],
+      secondary: boxes.find((b: any) => b.id === 'box_greens_detox'),
+      reason: 'Our best-selling daily farm harvest curated for 4-5 days of wholesome home cooking.',
+    };
   }
 
   /**
@@ -116,20 +177,19 @@ ${instruction ? `\nExtra instruction for this specific reply: ${instruction}` : 
       };
     }
 
-    if (!client || apiKey.startsWith('sk-ant-dummy')) {
+    if (!client) {
       return { isSpam: false, score: 5, reason: 'Clean comment' };
     }
 
     try {
       const response = await client.messages.create({
-        // Runs once per inbound comment — cheap/fast model, current generation.
-        model: 'claude-haiku-4-5',
+        model: 'claude-3-haiku-20240307',
         max_tokens: 100,
         temperature: 0,
         messages: [
           {
             role: 'user',
-            content: `Analyze this Instagram comment: "${commentText}". Return a JSON object with: { "isSpam": boolean, "score": number (0-100), "reason": string }. JSON only.`,
+            content: `Analyze this Instagram or Facebook comment: "${commentText}". Return a JSON object with: { "isSpam": boolean, "score": number (0-100), "reason": string }. JSON only.`,
           },
         ],
       });

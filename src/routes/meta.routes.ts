@@ -3,11 +3,25 @@ import { FlowEngine } from '../services/flowEngine.js';
 import { MetaService } from '../services/metaService.js';
 import { WhatsAppService } from '../services/whatsappService.js';
 import * as models from '../models/index.js';
+import { requireAuth, requirePlatformAdmin, requireSessionAuth } from '../middleware/auth.js';
+import { authOrgId, resolveAccount } from '../lib/scope.js';
+import { accountToken, encryptSecret, randomToken } from '../lib/crypto.js';
+import { sendError } from '../lib/http.js';
+import { z } from 'zod';
+import { audit } from '../services/audit.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const router = Router();
+const isProduction = () => process.env.NODE_ENV === 'production';
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+/** The secrets Meta may sign a webhook with: the Facebook app's, and the Instagram app's for Instagram Login. */
+const webhookSecrets = () => [process.env.META_APP_SECRET, process.env.INSTAGRAM_APP_SECRET].filter(Boolean) as string[];
+
+/** The verify token Meta must echo; no built-in fallback in production. */
+const verifyTokenSetting = () => process.env.META_WEBHOOK_VERIFY_TOKEN || (isProduction() ? '' : 'dev-meta-webhook-verify-token-change-me');
 
 /**
  * Instagram DMs and Facebook Messenger share the exact same `messaging`/
@@ -159,7 +173,7 @@ async function handleWhatsAppEntry(e: any) {
       console.log(`[WhatsApp Webhook] message "${text}" from ${from} -> ${JSON.stringify(result)}`);
 
       if (account) {
-        await WhatsAppService.markRead(phoneNumberId, msg.id, account.accessToken).catch(() => undefined);
+        await WhatsAppService.markRead(phoneNumberId, msg.id, accountToken(account)).catch(() => undefined);
       }
     }
   }
@@ -171,10 +185,9 @@ router.get('/webhook', (req, res) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  const expectedToken =
-    process.env.META_WEBHOOK_VERIFY_TOKEN || 'dev-meta-webhook-verify-token-change-me';
+  const expectedToken = verifyTokenSetting();
 
-  if (mode === 'subscribe' && token === expectedToken) {
+  if (mode === 'subscribe' && expectedToken && token === expectedToken) {
     console.log('[Meta Webhook] Successfully verified by Meta challenge!');
     return res.status(200).send(challenge);
   }
@@ -186,23 +199,32 @@ router.get('/webhook', (req, res) => {
 // Meta Webhook Event Ingestion (POST)
 router.post('/webhook', async (req, res) => {
   const signature = req.headers['x-hub-signature-256'] as string | undefined;
-  const appSecret = process.env.META_APP_SECRET;
+  const secrets = webhookSecrets();
 
-  if (appSecret && signature) {
-    const rawBody = JSON.stringify(req.body);
-    const valid = MetaService.verifySignature(rawBody, signature, appSecret);
-    if (!valid && process.env.NODE_ENV === 'production') {
+  // Every delivery must carry a valid signature over the exact bytes Meta
+  // sent. Without an app secret configured, production refuses everything;
+  // development accepts unsigned test posts with a warning.
+  if (secrets.length) {
+    const raw = req.rawBody;
+    if (!raw || !secrets.some((secret) => MetaService.verifySignature(raw, signature, secret))) {
       return res.status(401).json({ error: 'Invalid webhook signature' });
     }
+  } else if (isProduction()) {
+    console.error('[Meta Webhook] META_APP_SECRET is not set; refusing unsigned deliveries');
+    return res.status(503).json({ error: 'Webhook is not configured' });
+  } else {
+    console.warn('[Meta Webhook] No app secret configured: accepting an unsigned delivery (development only)');
   }
 
   // Acknowledge Meta immediately with 200 OK
   res.status(200).send('EVENT_RECEIVED');
 
-  // Persist the raw delivery before doing anything with it. Without this there
-  // is no way to tell "Meta never delivered" apart from "we mishandled it",
-  // which is the difference between a Meta config problem and a code problem.
-  const rawPayload = JSON.stringify(req.body);
+  // Persist the raw delivery before doing anything with it. Using the exact
+  // rawBody bytes preserves UTF-8 multi-byte characters (Telugu, emojis) without
+  // re-serialization mangling.
+  const rawPayload = req.rawBody
+    ? (Buffer.isBuffer(req.rawBody) ? req.rawBody.toString('utf8') : String(req.rawBody))
+    : JSON.stringify(req.body);
   let eventId: string | null = null;
   try {
     eventId = `wh_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -259,9 +281,14 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
-/** Recent webhook deliveries — the fastest way to tell whether Meta is calling us. */
-router.get('/webhook/recent', async (req, res) => {
+/**
+ * Recent webhook deliveries — the fastest way to tell whether Meta is calling
+ * us. Platform admin only: deliveries from every workspace land here, and the
+ * payloads are customers' messages, so they are left out unless asked for.
+ */
+router.get('/webhook/recent', requirePlatformAdmin, requireSessionAuth, async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const withPayload = req.query.payload === '1';
   const events = await models.WebhookEvent.find({})
     .sort({ receivedAt: -1 })
     .limit(limit)
@@ -277,13 +304,15 @@ router.get('/webhook/recent', async (req, res) => {
       status: e.status,
       error: e.error,
       receivedAt: e.receivedAt,
-      payload: (() => {
-        try {
-          return JSON.parse(e.payload);
-        } catch {
-          return e.payload;
-        }
-      })(),
+      ...(withPayload ? {
+        payload: (() => {
+          try {
+            return JSON.parse(e.payload);
+          } catch {
+            return e.payload;
+          }
+        })(),
+      } : {}),
     })),
   });
 });
@@ -295,7 +324,8 @@ router.get('/webhook/recent', async (req, res) => {
  * the product, for whichever channel you're turning on: 'instagram', 'page'
  * (Facebook Messenger + feed comments) or 'whatsapp_business_account'.
  */
-router.post('/webhook/register', async (req, res) => {
+// Platform admin only: the subscription belongs to the Meta app, shared by every workspace.
+router.post('/webhook/register', requirePlatformAdmin, requireSessionAuth, async (req, res) => {
   try {
     const object = req.body?.object as string;
     const validObjects = ['instagram', 'page', 'whatsapp_business_account'];
@@ -309,7 +339,8 @@ router.post('/webhook/register', async (req, res) => {
 
     const baseUrl = process.env.BASE_URL || 'https://bharatautomatebackend.onrender.com';
     const callbackUrl = `${baseUrl}/api/meta/webhook`;
-    const verifyToken = process.env.META_WEBHOOK_VERIFY_TOKEN || 'dev-meta-webhook-verify-token-change-me';
+    const verifyToken = verifyTokenSetting();
+    if (!verifyToken) return res.status(400).json({ error: 'META_WEBHOOK_VERIFY_TOKEN is not configured' });
 
     const defaultFields: Record<string, string> = {
       instagram: 'comments,live_comments,messages,messaging_postbacks,messaging_seen,message_reactions,messaging_referral,mentions',
@@ -343,16 +374,14 @@ router.post('/webhook/register', async (req, res) => {
 });
 
 // Test Webhook Simulator (Test any comment against live flows from the dashboard)
-router.post('/test-webhook', async (req, res) => {
+router.post('/test-webhook', requireAuth, async (req, res) => {
   try {
     const { commentText, username = 'test_user', accountId } = req.body;
     if (!commentText) return res.status(400).json({ error: 'Comment text is required' });
 
-    let targetAccountId = accountId;
-    if (!targetAccountId) {
-      const acc = await models.SocialAccount.findOne();
-      targetAccountId = acc ? acc._id : 'acc_default';
-    }
+    // Only an account of the caller's own workspace.
+    const account = await resolveAccount(authOrgId(req), accountId, 'instagram');
+    const targetAccountId = account._id;
 
     const result = await FlowEngine.processComment({
       accountId: targetAccountId,
@@ -365,13 +394,13 @@ router.post('/test-webhook', async (req, res) => {
 
     return res.json({ ok: true, result });
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    return sendError(res, error);
   }
 });
 
 // Direct Instagram Login OAuth URL Builder
 // Ref: https://developers.facebook.com/documentation/instagram-platform/instagram-api-with-instagram-login
-router.get('/oauth/url', (req, res) => {
+router.get('/oauth/url', requireAuth, async (req, res) => {
   // Instagram Business Login authenticates against the *Instagram* app id, which
   // is issued by the Instagram product and is a different number from the
   // Facebook App ID on App settings > Basic. Sending the Facebook App ID here is
@@ -406,10 +435,21 @@ router.get('/oauth/url', (req, res) => {
     .map((s) => s.trim())
     .filter(Boolean);
 
+  // The state ties the callback to this workspace and user, and expires.
+  const state = `sma_${randomToken(24)}`;
+  await models.OAuthState.create({
+    _id: state,
+    state,
+    orgId: authOrgId(req),
+    userId: req.auth?.userId,
+    mode: 'instagram',
+    expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
+  });
+
   const instagramLoginUrl = MetaService.buildInstagramLoginUrl({
     appId,
     redirectUri,
-    state: `sma_${Date.now().toString(36)}`,
+    state,
     scopes,
   });
 
@@ -435,6 +475,7 @@ router.get('/oauth/url', (req, res) => {
 // Instagram OAuth Callback Handler
 router.get('/oauth/callback', async (req, res) => {
   const code = req.query.code as string | undefined;
+  const stateParam = typeof req.query.state === 'string' ? req.query.state : '';
   const error = req.query.error as string | undefined;
   const errorReason = req.query.error_reason as string | undefined;
   const errorDescription = req.query.error_description as string | undefined;
@@ -447,6 +488,14 @@ router.get('/oauth/callback', async (req, res) => {
     return res.redirect(
       `${frontendUrl}/accounts?error=${encodeURIComponent(errorDescription || error || 'Authorization cancelled')}`
     );
+  }
+
+  // One use, unexpired, issued by /oauth/url for a signed-in user.
+  const oauthState = stateParam
+    ? await models.OAuthState.findOneAndDelete({ state: stateParam, expiresAt: { $gt: new Date() } })
+    : null;
+  if (!oauthState) {
+    return res.redirect(`${frontendUrl}/accounts?error=${encodeURIComponent('This sign-in link expired. Please connect again.')}`);
   }
 
   try {
@@ -464,8 +513,7 @@ router.get('/oauth/callback', async (req, res) => {
       redirectUri,
     });
 
-    const org = await models.Organization.findOne();
-    const orgId = org ? org._id : 'org_workspace';
+    const orgId = oauthState.orgId;
 
     const accountId = `acc_${exchange.username.replace(/[^a-zA-Z0-9_]/g, '')}_${Date.now().toString(36)}`;
 
@@ -494,7 +542,7 @@ router.get('/oauth/callback', async (req, res) => {
           biography: exchange.biography,
           website: exchange.website,
           loginMode: 'instagram',
-          accessToken: exchange.accessToken,
+          accessToken: encryptSecret(exchange.accessToken),
           tokenExpiresAt: new Date(Date.now() + exchange.expiresIn * 1000),
           lastRefreshedAt: new Date(),
           scopes,
@@ -541,15 +589,15 @@ router.get('/oauth/callback', async (req, res) => {
         <body>
           <div class="card">
             <h2>Connected Successfully! 🎉</h2>
-            <p>Your Instagram account <strong>@${exchange.username}</strong> has been linked.</p>
+            <p>Your Instagram account <strong>@${exchange.username.replace(/[^A-Za-z0-9._]/g, '')}</strong> has been linked.</p>
             <p>Redirecting to dashboard...</p>
           </div>
           <script>
             if (window.opener) {
-              window.opener.postMessage({ type: 'INSTAGRAM_CONNECTED', account: ${JSON.stringify(account)} }, '*');
+              window.opener.postMessage(${JSON.stringify({ type: 'INSTAGRAM_CONNECTED', account: { id: account?._id ?? accountId, username: exchange.username } }).replace(/</g, '\\u003c')}, ${JSON.stringify(new URL(frontendUrl).origin)});
               setTimeout(() => window.close(), 1200);
             } else {
-              window.location.href = "${frontendUrl}/accounts?connected=true&username=${encodeURIComponent(exchange.username)}";
+              window.location.href = ${JSON.stringify(`${frontendUrl}/accounts?connected=true&username=${encodeURIComponent(exchange.username)}`)};
             }
           </script>
         </body>
@@ -564,15 +612,34 @@ router.get('/oauth/callback', async (req, res) => {
   }
 });
 
-// Update Meta App Credentials on the fly
-router.post('/config', (req, res) => {
-  const { appId, appSecret, redirectUri, instagramAppId, instagramAppSecret } = req.body;
+// Update Meta App Credentials on the fly (in memory until the next restart;
+// set them in the host's environment to keep them). Platform admin only: they
+// are the app's credentials for every workspace.
+const configBody = z.object({
+  appId: z.string().trim().max(100).optional(),
+  appSecret: z.string().trim().max(100).optional(),
+  redirectUri: z.string().trim().url().max(300).optional(),
+  instagramAppId: z.string().trim().max(100).optional(),
+  instagramAppSecret: z.string().trim().max(100).optional(),
+});
+
+router.post('/config', requirePlatformAdmin, requireSessionAuth, (req, res) => {
+  const parsed = configBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid configuration payload', details: parsed.error.format() });
+  }
+
+  const { appId, appSecret, redirectUri, instagramAppId, instagramAppSecret } = parsed.data;
   if (appId) process.env.META_APP_ID = appId;
   if (appSecret) process.env.META_APP_SECRET = appSecret;
   if (redirectUri) process.env.META_REDIRECT_URI = redirectUri;
   // Instagram Business Login uses its own app id/secret pair.
   if (instagramAppId) process.env.INSTAGRAM_APP_ID = instagramAppId;
   if (instagramAppSecret) process.env.INSTAGRAM_APP_SECRET = instagramAppSecret;
+
+  audit(req, 'platform.meta_config_updated', { type: 'platform' }, {
+    updatedFields: Object.keys(parsed.data).filter((k) => (parsed.data as any)[k] !== undefined),
+  });
 
   const igId = process.env.INSTAGRAM_APP_ID || '';
   return res.json({

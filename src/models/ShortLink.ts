@@ -5,6 +5,12 @@ export interface IShortLink {
   orgId: string;
   slug: string;
   targetUrl: string;
+  title?: string;
+  /** Attribution: which account / automation / broadcast / contact the link was minted for. */
+  accountId?: string;
+  automationId?: string;
+  broadcastId?: string;
+  contactId?: string;
   meta: Record<string, unknown>;
   clickCount: number;
   uniqueCount: number;
@@ -18,6 +24,11 @@ const ShortLinkSchema = new Schema<IShortLink>(
     orgId: { type: String, required: true, index: true },
     slug: { type: String, required: true, unique: true, index: true },
     targetUrl: { type: String, required: true },
+    title: { type: String },
+    accountId: { type: String, index: true },
+    automationId: { type: String, index: true },
+    broadcastId: { type: String, index: true },
+    contactId: { type: String },
     meta: { type: Schema.Types.Mixed, default: {} },
     clickCount: { type: Number, default: 0 },
     uniqueCount: { type: Number, default: 0 },

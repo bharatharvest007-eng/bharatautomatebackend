@@ -1,24 +1,33 @@
 import { Router } from 'express';
 import * as models from '../models/index.js';
 import { MetaService } from '../services/metaService.js';
+import { authOrgId } from '../lib/scope.js';
+import { accountToken, encryptSecret, maskSecret } from '../lib/crypto.js';
 
 const router = Router();
 
-// List connected accounts (Up to 10)
+/** Sanitizes social accounts so sensitive tokens are never sent in plaintext over API */
+function sanitizeAccount(acc: any) {
+  const obj = typeof acc.toObject === 'function' ? acc.toObject() : { ...acc };
+  const rawToken = accountToken(obj);
+  obj.hasAccessToken = Boolean(rawToken);
+  obj.maskedToken = rawToken ? maskSecret(rawToken) : null;
+  delete obj.accessToken;
+  return obj;
+}
+
+// List connected accounts for current workspace
 router.get('/', async (req, res) => {
   try {
-    const org = await models.Organization.findOne();
-    const accounts = await models.SocialAccount.find(org ? { orgId: org._id } : {});
-    return res.json({ ok: true, accounts });
+    const orgId = authOrgId(req);
+    const accounts = await models.SocialAccount.find({ orgId }).sort({ connectedAt: -1 });
+    return res.json({ ok: true, accounts: accounts.map(sanitizeAccount) });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
 });
 
 // Connect an Instagram account directly with a Page Access Token & Instagram Business ID.
-// Field names below match the SocialAccount schema exactly — Mongoose strict
-// mode silently drops anything that doesn't, which is how this route used to
-// "succeed" while saving an account that could never actually send a DM.
 router.post('/connect', async (req, res) => {
   try {
     const { username, instagramBusinessId, accessToken, dailyDmLimit } = req.body;
@@ -27,8 +36,7 @@ router.post('/connect', async (req, res) => {
       return res.status(400).json({ error: 'Username and Page Access Token are required' });
     }
 
-    const org = await models.Organization.findOne();
-    const orgId = org ? org._id : 'org_workspace';
+    const orgId = authOrgId(req);
 
     // Verify token validity with Meta Graph API
     const validation = await MetaService.validateToken(accessToken);
@@ -46,10 +54,11 @@ router.post('/connect', async (req, res) => {
           name: cleanUsername,
           igUserId,
           loginMode: 'facebook', // manual Page Access Token, not Instagram Login
-          accessToken,
+          accessToken: encryptSecret(accessToken),
           tokenExpiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000), // 60 days
           dailyDmLimit: Number(dailyDmLimit) || 1000,
           status: 'active',
+          lastRefreshedAt: new Date(),
         },
         $setOnInsert: { _id: accountId, connectedAt: new Date() },
       },
@@ -58,7 +67,7 @@ router.post('/connect', async (req, res) => {
 
     return res.status(201).json({
       ok: true,
-      account,
+      account: sanitizeAccount(account),
       metaValidation: validation,
       message: 'Instagram account connected successfully',
     });
@@ -70,14 +79,15 @@ router.post('/connect', async (req, res) => {
 // Update custom DM limit
 router.patch('/:id/limit', async (req, res) => {
   try {
+    const orgId = authOrgId(req);
     const { limit } = req.body;
-    const account = await models.SocialAccount.findByIdAndUpdate(
-      req.params.id,
+    const account = await models.SocialAccount.findOneAndUpdate(
+      { _id: req.params.id, orgId },
       { $set: { dailyDmLimit: Number(limit) } },
       { returnDocument: 'after' }
     );
     if (!account) return res.status(404).json({ error: 'Account not found' });
-    return res.json({ ok: true, account });
+    return res.json({ ok: true, account: sanitizeAccount(account) });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
@@ -86,10 +96,12 @@ router.patch('/:id/limit', async (req, res) => {
 // Test live token validity
 router.get('/:id/status', async (req, res) => {
   try {
-    const account = await models.SocialAccount.findById(req.params.id);
+    const orgId = authOrgId(req);
+    const account = await models.SocialAccount.findOne({ _id: req.params.id, orgId });
     if (!account) return res.status(404).json({ error: 'Account not found' });
 
-    const status = await MetaService.validateToken(account.accessToken);
+    const token = accountToken(account);
+    const status = await MetaService.validateToken(token);
     return res.json({ ok: true, status, accountId: account._id, username: account.username });
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
@@ -99,7 +111,8 @@ router.get('/:id/status', async (req, res) => {
 // Disconnect account
 router.delete('/:id', async (req, res) => {
   try {
-    const deleted = await models.SocialAccount.findByIdAndDelete(req.params.id);
+    const orgId = authOrgId(req);
+    const deleted = await models.SocialAccount.findOneAndDelete({ _id: req.params.id, orgId });
     if (!deleted) return res.status(404).json({ error: 'Account not found' });
     return res.json({ ok: true, message: 'Account disconnected successfully' });
   } catch (error: any) {

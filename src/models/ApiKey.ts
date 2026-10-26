@@ -1,12 +1,16 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 
+/** Public API key. Only sha256(rawKey) is stored in `hash`; `prefix` is the display hint. */
 export interface IApiKey {
   _id: string;
   orgId: string;
   name: string;
   prefix: string;
   hash: string;
+  /** 'read' and/or 'write'. */
   scopes: string[];
+  /** User who created the key; API-key requests act on their behalf. */
+  createdBy?: string;
   lastUsedAt?: Date;
   revokedAt?: Date;
   createdAt: Date;
@@ -20,6 +24,7 @@ const ApiKeySchema = new Schema<IApiKey>(
     prefix: { type: String, required: true },
     hash: { type: String, required: true, unique: true, index: true },
     scopes: [{ type: String }],
+    createdBy: { type: String },
     lastUsedAt: { type: Date },
     revokedAt: { type: Date },
   },

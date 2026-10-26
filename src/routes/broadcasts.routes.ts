@@ -3,6 +3,7 @@ import * as models from '../models/index.js';
 import { MetaService } from '../services/metaService.js';
 import { WhatsAppService } from '../services/whatsappService.js';
 import { matchesAudience } from '../services/flowEngine.js';
+import { enqueueJob } from '../services/jobs.js';
 import type { MessageContent } from '../types/index.js';
 
 /**
@@ -122,11 +123,10 @@ router.post('/:id/send', async (req, res) => {
       { $set: { status: 'sending', startedAt: new Date(), totalCount: contacts.length } },
     );
 
-    // Respond immediately — Render's default request timeout would otherwise
-    // cut off a broadcast to any meaningfully sized list.
-    res.status(202).json({ ok: true, started: true, totalCount: contacts.length });
+    // Enqueue durable background job so delivery survives process restarts
+    await enqueueJob('campaigns.send_broadcast', { broadcastId: broadcast._id }, { dedupeKey: `broadcast:${broadcast._id}` });
 
-    void runBroadcast(broadcast, account, template, contacts);
+    return res.status(202).json({ ok: true, started: true, totalCount: contacts.length });
   } catch (error: any) {
     if (!res.headersSent) res.status(500).json({ error: error.message });
   }

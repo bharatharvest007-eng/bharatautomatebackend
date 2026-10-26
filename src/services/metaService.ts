@@ -38,13 +38,18 @@ export class MetaService {
   /**
    * Verify signature on incoming Meta Webhooks (X-Hub-Signature-256)
    */
-  static verifySignature(payload: string, signatureHeader?: string, appSecret?: string): boolean {
+  /**
+   * Checks Meta's X-Hub-Signature-256 header against the exact request bytes
+   * (`req.rawBody`). Re-serialising the parsed JSON doesn't reproduce Meta's
+   * bytes (escaping, key order), so it must be the raw body. A malformed
+   * header is simply invalid, never an exception.
+   */
+  static verifySignature(payload: Buffer | string, signatureHeader?: string, appSecret?: string): boolean {
     if (!signatureHeader || !appSecret) return false;
     const [algo, signature] = signatureHeader.split('=');
-    if (algo !== 'sha256' || !signature) return false;
-    const hmac = crypto.createHmac('sha256', appSecret);
-    const digest = hmac.update(payload, 'utf8').digest('hex');
-    return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(digest, 'hex'));
+    if (algo !== 'sha256' || !signature || !/^[0-9a-f]{64}$/i.test(signature)) return false;
+    const digest = crypto.createHmac('sha256', appSecret).update(payload).digest();
+    return crypto.timingSafeEqual(Buffer.from(signature, 'hex'), digest);
   }
 
   /**

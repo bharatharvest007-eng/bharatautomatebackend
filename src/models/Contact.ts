@@ -1,5 +1,15 @@
 import mongoose, { Schema, model, type Model } from 'mongoose';
 
+export type ContactStage = 'new' | 'engaged' | 'qualified' | 'customer' | 'lost';
+export const CONTACT_STAGES: readonly ContactStage[] = ['new', 'engaged', 'qualified', 'customer', 'lost'];
+
+/** WhatsApp marketing templates may only go to contacts who opted in. */
+export interface IContactConsent {
+  whatsappOptIn: boolean;
+  optInAt?: Date;
+  optInSource?: string;
+}
+
 export interface IContact {
   _id: string;
   orgId: string;
@@ -34,9 +44,26 @@ export interface IContact {
   lastSeenAt: Date;
   lastInboundAt?: Date;
   lastOutboundAt?: Date;
+  /** AI lead score 0-100. */
+  score: number;
+  stage: ContactStage;
+  scoreReasons: string[];
+  nextAction?: string;
+  nextActionMessage?: string;
+  lastScoredAt?: Date;
+  consent: IContactConsent;
   createdAt: Date;
   updatedAt: Date;
 }
+
+const ContactConsentSchema = new Schema<IContactConsent>(
+  {
+    whatsappOptIn: { type: Boolean, default: false },
+    optInAt: { type: Date },
+    optInSource: { type: String },
+  },
+  { _id: false },
+);
 
 const ContactSchema = new Schema<IContact>(
   {
@@ -71,6 +98,13 @@ const ContactSchema = new Schema<IContact>(
     lastSeenAt: { type: Date, default: Date.now, index: true },
     lastInboundAt: { type: Date },
     lastOutboundAt: { type: Date },
+    score: { type: Number, default: 0, min: 0, max: 100 },
+    stage: { type: String, default: 'new', enum: CONTACT_STAGES },
+    scoreReasons: { type: [String], default: [] },
+    nextAction: { type: String },
+    nextActionMessage: { type: String },
+    lastScoredAt: { type: Date },
+    consent: { type: ContactConsentSchema, default: () => ({}) },
   },
   {
     timestamps: true,
@@ -88,5 +122,7 @@ const ContactSchema = new Schema<IContact>(
 
 ContactSchema.index({ accountId: 1, igsid: 1 }, { unique: true });
 ContactSchema.index({ orgId: 1, lastSeenAt: -1 });
+ContactSchema.index({ orgId: 1, score: -1 });
+ContactSchema.index({ orgId: 1, stage: 1, lastSeenAt: -1 });
 
 export const Contact: Model<IContact> = (mongoose.models.Contact as any) || model<IContact>('Contact', ContactSchema);
