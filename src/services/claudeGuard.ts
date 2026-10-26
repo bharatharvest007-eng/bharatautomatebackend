@@ -15,8 +15,9 @@ const HARD_BUDGET_CAP_USD = 3.00;
 const MAX_CALLS_PER_MINUTE = 12;
 
 // STRICT RULE: ONLY HAIKU MODEL TO PRESERVE $3.00 BUDGET
-export const HAIKU_MODEL = 'claude-3-5-haiku-20241022';
-export const HAIKU_FALLBACK_MODEL = 'claude-3-haiku-20240307';
+export const HAIKU_MODEL = 'claude-haiku-4-5-20251001';
+export const HAIKU_FALLBACK_MODEL = 'claude-haiku-5-5';
+export const LEGACY_HAIKU_MODEL = 'claude-3-5-haiku-20241022';
 
 // Per-token cost definitions for Claude Haiku (USD)
 const PRICING: Record<string, { inputPerToken: number; outputPerToken: number }> = {
@@ -25,8 +26,8 @@ const PRICING: Record<string, { inputPerToken: number; outputPerToken: number }>
     outputPerToken: 4.00 / 1_000_000,  // $0.00000400
   },
   [HAIKU_FALLBACK_MODEL]: {
-    inputPerToken: 0.25 / 1_000_000,   // $0.00000025
-    outputPerToken: 1.25 / 1_000_000,  // $0.00000125
+    inputPerToken: 0.80 / 1_000_000,   // $0.00000080
+    outputPerToken: 4.00 / 1_000_000,  // $0.00000400
   },
   default: {
     inputPerToken: 0.80 / 1_000_000,

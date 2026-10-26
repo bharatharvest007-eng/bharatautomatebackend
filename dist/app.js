@@ -107,6 +107,7 @@ app.get('/r/:slug', redirectShortLink);
 app.use('/api/billing', billingRoutes);
 app.use('/api/v1', publicApiRoutes);
 app.use('/api/farmbox', farmboxRoutes);
+app.use('/api/ai', aiRoutes);
 // --- Private routers -------------------------------------------------------------
 app.use('/api/accounts', requireAuth, accountsRoutes);
 app.use('/api/automations', requireAuth, automationsRoutes);
@@ -114,7 +115,6 @@ app.use('/api/templates', requireAuth, templatesRoutes);
 app.use('/api/contacts', requireAuth, contactsRoutes);
 app.use('/api/leads', requireAuth, leadsRoutes);
 app.use('/api/inbox', requireAuth, inboxRoutes);
-app.use('/api/ai', requireAuth, aiRoutes);
 app.use('/api/smart', requireAuth, smartRoutes);
 app.use('/api/rewind', requireAuth, rewindRoutes);
 app.use('/api/trial-reels', requireAuth, trialReelsRoutes);
